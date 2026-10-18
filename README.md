@@ -103,7 +103,7 @@ The frontend is static and goes on Vercel. The multiplayer backend holds persist
 - Health check path: `/healthz`
 - Env: `CLIENT_ORIGIN=https://<your-vercel-domain>`
 
-*Railway:* New Project → Deploy from repo (uses `railway.json`), add `CLIENT_ORIGIN`, then generate a public domain. A `Dockerfile` for the server is also included.
+*Railway:* New Project → Deploy from repo (uses `railway.json`), add `CLIENT_ORIGIN`, then generate a public domain. A `Dockerfile.server` is also included (`docker build -f Dockerfile.server .`).
 
 Note the public URL, e.g. `https://blind-shot-server.onrender.com`. (Free Render instances sleep when idle – the first connection can take ~30 s.)
 
