@@ -35,16 +35,16 @@ export class LocalSession extends GameSession {
   private step(): void {
     this.engine.tick(performance.now());
     if (this.engine.phase === 'aiming') {
-      const sig = this.engine.snapshot(0).players.map((p) => (p.locked ? 1 : 0)).join('');
+      const sig = this.engine.snapshot(0, this.youId).players.map((p) => (p.locked ? 1 : 0)).join('');
       if (sig !== this.lockSig) {
         const old = this.lockSig;
         this.lockSig = sig;
-        const players = this.engine.snapshot(0).players;
+        const players = this.engine.snapshot(0, this.youId).players;
         players.forEach((p, i) => {
           if (p.id !== this.youId && old[i] !== sig[i] && old) this.emit({ type: 'lock', id: p.id, locked: p.locked });
         });
         if (this.view) {
-          this.view.snap.players = this.engine.snapshot(0).players;
+          this.view.snap.players = this.engine.snapshot(0, this.youId).players;
           this.emit({ type: 'snapshot' });
         }
       }

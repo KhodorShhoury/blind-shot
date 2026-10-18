@@ -10,7 +10,7 @@ export interface BeamResult {
   /** Flat polyline [x0,y0,x1,y1,...] including wall bounce points and the end point. */
   points: number[];
   hitId: string | null;
-  end: 'player' | 'pillar' | 'range';
+  end: 'player' | 'range';
   bounces: number;
   length: number;
 }
@@ -22,13 +22,6 @@ export function normAngle(a: number): number {
   if (a > Math.PI) a -= TAU;
   else if (a <= -Math.PI) a += TAU;
   return a;
-}
-
-export function pillarRadius(round: number, cfg: GameConfig): number {
-  const { pillarBase, pillarCollapseRound } = cfg.arena;
-  if (pillarBase <= 0) return 0;
-  const f = 1 - (round - 1) / pillarCollapseRound;
-  return f <= 0 ? 0 : Math.round(pillarBase * f);
 }
 
 /** Distance along a unit-direction ray to a circle, or Infinity. */
@@ -48,7 +41,7 @@ const r1 = (n: number) => Math.round(n * 10) / 10;
 
 /**
  * Traces a laser from (ox,oy). The beam bounces off the arena walls up to cfg.beam.maxBounces times,
- * stops at the nearest player body (never its owner), and is absorbed by the central pillar.
+ * stops at the nearest player body (never its owner).
  */
 export function traceBeam(
   ox: number,
@@ -56,13 +49,10 @@ export function traceBeam(
   angle: number,
   targets: BeamTarget[],
   ownerId: string | null,
-  pillarR: number,
   cfg: GameConfig,
 ): BeamResult {
   const { w, h, playerRadius } = cfg.arena;
   const hitR = playerRadius + cfg.beam.halfWidth;
-  const cx = w / 2;
-  const cy = h / 2;
   let dx = Math.cos(angle);
   let dy = Math.sin(angle);
   let px = ox;
@@ -88,18 +78,13 @@ export function traceBeam(
         pid = t.id;
       }
     }
-    const tPillar = pillarR > 0 ? rayCircle(px, py, dx, dy, cx, cy, pillarR + cfg.beam.halfWidth) : Infinity;
-
-    const tNear = Math.min(tPlayer, tPillar);
-    if (tNear < tWall && tNear <= remaining) {
-      px += dx * tNear;
-      py += dy * tNear;
+    if (tPlayer < tWall && tPlayer <= remaining) {
+      px += dx * tPlayer;
+      py += dy * tPlayer;
       points.push(r1(px), r1(py));
-      remaining -= tNear;
-      if (tPlayer <= tPillar) {
-        hitId = pid;
-        end = 'player';
-      } else end = 'pillar';
+      remaining -= tPlayer;
+      hitId = pid;
+      end = 'player';
       break;
     }
     if (tWall >= remaining) {
@@ -126,20 +111,47 @@ export function traceBeam(
   return { points, hitId, end, bounces, length: cfg.beam.maxLength - remaining };
 }
 
-/** Fair, centre-symmetric spawn layout for n players, randomly rotated; order is shuffled. */
-export function formation(n: number, cfg: GameConfig, rng: Rng): { x: number; y: number }[] {
-  const { w, h, spawnRadius } = cfg.arena;
-  const base = n === 4 ? Math.PI / 4 : rng() * TAU;
-  const pts: { x: number; y: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = base + (i * TAU) / n;
-    pts.push({ x: Math.round(w / 2 + Math.cos(a) * spawnRadius), y: Math.round(h / 2 + Math.sin(a) * spawnRadius) });
+/**
+ * Independent, uniformly random spawn points for n players (rejection sampling with a minimum
+ * pairwise distance and a wall margin). Every call is a fresh draw: nothing depends on earlier rounds.
+ * If the constraints keep failing the distance is relaxed step by step; the last resort is a jittered
+ * grid, so placement always succeeds and never overlaps.
+ */
+export function randomSpawns(n: number, cfg: GameConfig, rng: Rng): { x: number; y: number }[] {
+  const { w, h, spawnMargin: m, minPlayerDist } = cfg.arena;
+  const rw = w - 2 * m;
+  const rh = h - 2 * m;
+  for (let relax = 0; relax < 5; relax++) {
+    const minD = minPlayerDist * (1 - relax * 0.15);
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < n; i++) {
+        let placed = false;
+        for (let k = 0; k < 40 && !placed; k++) {
+          const c = { x: Math.round(m + rng() * rw), y: Math.round(m + rng() * rh) };
+          if (pts.every((q) => Math.hypot(q.x - c.x, q.y - c.y) >= minD)) {
+            pts.push(c);
+            placed = true;
+          }
+        }
+        if (!placed) break;
+      }
+      if (pts.length === n) return pts;
+    }
   }
-  for (let i = pts.length - 1; i > 0; i--) {
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const cells = Array.from({ length: cols * rows }, (_, i) => i);
+  for (let i = cells.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
-    [pts[i], pts[j]] = [pts[j], pts[i]];
+    [cells[i], cells[j]] = [cells[j], cells[i]];
   }
-  return pts;
+  const cw = w / cols;
+  const ch = h / rows;
+  return cells.slice(0, n).map((c) => ({
+    x: Math.round((c % cols) * cw + m + rng() * (cw - 2 * m)),
+    y: Math.round(Math.floor(c / cols) * ch + m + rng() * (ch - 2 * m)),
+  }));
 }
 
 /** Shortest distance from point to a polyline (flat array). */

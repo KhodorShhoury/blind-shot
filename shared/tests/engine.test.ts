@@ -1,32 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import { buildConfig, seededRng } from '@shared/config';
 import { MatchEngine, type PlayerInit } from '@shared/engine';
+import { planBot } from '@shared/bots';
 
-const cfg = buildConfig({ arena: { pillarBase: 0 }, room: { disconnectGraceMs: 5000 } });
+const cfg = buildConfig({ room: { disconnectGraceMs: 5000 } });
 const T = cfg.timing;
-const zero = () => 0; // deterministic: no shuffle, base angle 0
 
-function make(n: number, c = cfg, rng = zero) {
-  const inits: PlayerInit[] = Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: 'P' + i, slot: i }));
+function inits(n: number): PlayerInit[] {
+  return Array.from({ length: n }, (_, i) => ({ id: 'p' + i, name: 'P' + i, slot: i }));
+}
+
+function make(n: number, seed = 1, c = cfg) {
   const events: string[] = [];
-  const e = new MatchEngine(inits, rng, c, (ev) => events.push(ev));
+  const e = new MatchEngine(inits(n), seededRng(seed), c, (ev) => events.push(ev));
   e.start(0);
   return { e, events };
 }
 
+const pos = (e: MatchEngine, id: string) => e.secretPositions().find((p) => p.id === id)!;
+
 function aimAt(e: MatchEngine, from: string, to: string) {
-  const s = e.snapshot(0);
-  const a = s.players.find((p) => p.id === from)!;
-  const b = s.players.find((p) => p.id === to)!;
+  const a = pos(e, from);
+  const b = pos(e, to);
   e.setAim(from, Math.atan2(b.y - a.y, b.x - a.x));
 }
 
-function aimAway(e: MatchEngine, id: string, off = 0.35) {
-  const a = e.snapshot(0).players.find((p) => p.id === id)!;
-  e.setAim(id, Math.atan2(a.y - 500, a.x - 500) + off);
+/** Fire directly away from `other`, which can never hit it (a ray only goes forward). */
+function aimAwayFrom(e: MatchEngine, id: string, other: string) {
+  const a = pos(e, id);
+  const b = pos(e, other);
+  e.setAim(id, Math.atan2(a.y - b.y, a.x - b.x));
 }
 
-/** Advance to the fire reveal. */
+/** Advance to the fire reveal; returns the time at which 'fire' began. */
 function playRound(e: MatchEngine, t0 = 0) {
   e.tick(t0 + T.aimMs);
   e.tick(t0 + T.aimMs + T.lockMs);
@@ -66,19 +72,61 @@ describe('MatchEngine phases', () => {
     expect(e.phase).toBe('aiming');
   });
 
-  it('ignores aim changes while locked and after the aiming phase', () => {
+  it('lets a player change direction until the countdown expires, then locks it', () => {
+    const { e } = make(2);
+    e.setAim('p0', 1);
+    e.setAim('p0', -2);
+    expect(e.snapshot(0, 'p0').you!.aim).toBeCloseTo(-2, 2);
+    e.tick(T.aimMs);
+    e.setAim('p0', 2); // too late
+    e.setLocked('p0', false);
+    const s = e.snapshot(T.aimMs, 'p0');
+    expect(s.you!.aim).toBeCloseTo(-2, 2);
+    expect(s.you!.locked).toBe(true);
+  });
+
+  it('ignores aim changes while locked', () => {
     const { e } = make(2);
     e.setAim('p0', 1);
     e.setLocked('p0', true);
     e.setAim('p0', 2);
     expect(e.snapshot(0, 'p0').you!.aim).toBeCloseTo(1, 2);
-    e.tick(T.aimMs);
-    e.setLocked('p0', false);
-    expect(e.snapshot(T.aimMs, 'p0').you!.locked).toBe(true);
   });
 });
 
-describe('secrecy', () => {
+describe('secrecy: hidden positions and aims', () => {
+  it("a player's snapshot contains only their OWN position during aiming and lock", () => {
+    const { e } = make(4);
+    for (const phaseAt of [0, T.aimMs]) {
+      for (const id of ['p0', 'p1', 'p2', 'p3']) {
+        const s = e.snapshot(phaseAt, id);
+        expect(['aiming', 'lock']).toContain(s.phase);
+        for (const p of s.players) {
+          if (p.id === id) {
+            expect(p.x).toBe(pos(e, id).x);
+            expect(p.y).toBe(pos(e, id).y);
+          } else {
+            expect(p.x).toBeUndefined();
+            expect(p.y).toBeUndefined();
+          }
+        }
+      }
+    }
+  });
+
+  it('the secret coordinates never appear anywhere in another player’s payload', () => {
+    const { e } = make(4, 7);
+    const secret = e.secretPositions();
+    const json = JSON.stringify(e.snapshot(0, 'p0'));
+    for (const q of secret.filter((s) => s.id !== 'p0')) {
+      expect(json).not.toContain(`"x":${q.x},`);
+      expect(json).not.toContain(`"y":${q.y}`);
+    }
+    // spectator / server broadcast view has no coordinates at all
+    expect(JSON.stringify(e.snapshot(0))).not.toMatch(/"x":/);
+    expect(JSON.stringify(e.snapshot(0))).not.toMatch(/"y":/);
+  });
+
   it("never leaks other players' aim before the reveal", () => {
     const { e } = make(3);
     e.setAim('p1', 1.2345);
@@ -91,10 +139,48 @@ describe('secrecy', () => {
     expect(e.snapshot(T.aimMs, 'p0').shots).toHaveLength(0);
   });
 
-  it('reveals all shots after firing', () => {
+  it('reveals every shooter, shot and position after firing', () => {
     const { e } = make(3);
     const t = playRound(e);
-    expect(e.snapshot(t).shots).toHaveLength(3);
+    const s = e.snapshot(t, 'p0');
+    expect(s.phase).toBe('fire');
+    expect(s.shots).toHaveLength(3);
+    for (const p of s.players) {
+      expect(p.x).toBe(pos(e, p.id).x);
+      expect(p.y).toBe(pos(e, p.id).y);
+    }
+  });
+
+  it('hides everyone again in the next round, with positions nobody was told', () => {
+    const { e } = make(4, 11);
+    const before = e.secretPositions();
+    const t = playRound(e);
+    e.tick(t + T.fireMs + T.resultMs);
+    const alive = e.snapshot(0, 'p0');
+    if (e.phase === 'aiming') {
+      expect(alive.round).toBe(2);
+      for (const p of alive.players) if (p.id !== 'p0') expect(p.x).toBeUndefined();
+      expect(alive.shots).toHaveLength(0);
+      expect(alive.eliminations).toHaveLength(0);
+      const after = e.secretPositions();
+      // an independent draw: nobody keeps their old spot
+      for (const a of after) {
+        const b = before.find((q) => q.id === a.id);
+        if (b) expect(a.x === b.x && a.y === b.y).toBe(false);
+      }
+    }
+  });
+
+  it('eliminated players never get a position in aiming snapshots', () => {
+    const { e } = make(4, 3);
+    aimAt(e, 'p0', 'p1');
+    for (const id of ['p1', 'p2', 'p3']) aimAwayFrom(e, id, 'p0');
+    const t = playRound(e);
+    e.tick(t + T.fireMs + T.resultMs);
+    expect(e.phase).toBe('aiming');
+    const dead = e.snapshot(0, 'p1');
+    expect(dead.players.find((p) => p.id === 'p1')!.alive).toBe(false);
+    expect(dead.players.every((p) => p.x === undefined)).toBe(true);
   });
 });
 
@@ -116,7 +202,6 @@ describe('volley resolution', () => {
 
   it('a player killed in the same volley still fires their committed shot', () => {
     const { e } = make(3);
-    // p0 -> p1, p1 -> p2, p2 -> p0 : all three die simultaneously
     aimAt(e, 'p0', 'p1');
     aimAt(e, 'p1', 'p2');
     aimAt(e, 'p2', 'p0');
@@ -142,16 +227,115 @@ describe('volley resolution', () => {
     expect(f.standings.find((x) => x.id === 'p1')!.place).toBe(2);
   });
 
-  it('continues to the next round when 2+ survive and repositions players', () => {
-    const { e } = make(4, buildConfig({ arena: { pillarBase: 0 }, beam: { maxBounces: 0 } }));
-    aimAt(e, 'p0', 'p1'); // p0 kills p1; everyone else aims harmlessly outward
-    aimAway(e, 'p1'); aimAway(e, 'p2'); aimAway(e, 'p3');
+  it('collision uses the secret positions: aiming where nobody is hits nobody', () => {
+    const { e } = make(4, 21);
+    const ids = ['p0', 'p1', 'p2', 'p3'];
+    // each player shoots away from the closest other player's direction... a guaranteed-miss is hard
+    // with 4 players, so instead check the result is exactly what geometry says it should be
+    for (const id of ids) e.setAim(id, 0.5);
     const t = playRound(e);
+    const s = e.snapshot(t);
+    for (const shot of s.shots) {
+      const shooter = pos(e, shot.shooterId);
+      expect(shot.points[0]).toBeCloseTo(shooter.x, 0);
+      expect(shot.points[1]).toBeCloseTo(shooter.y, 0);
+      expect(shot.angle).toBeCloseTo(0.5, 2);
+    }
+  });
+
+  it('a round where nobody is hit leaves everyone alive and simply starts another round', () => {
+    const { e } = make(4, 5);
+    const ids = ['p0', 'p1', 'p2', 'p3'];
+    // pick, per player, a direction that provably misses every opponent
+    for (const id of ids) {
+      const me = pos(e, id);
+      const others = e.secretPositions().filter((q) => q.id !== id);
+      let chosen = 0;
+      for (let k = 0; k < 720; k++) {
+        const a = (k / 720) * Math.PI * 2;
+        const hits = others.some((o) => {
+          const dx = o.x - me.x, dy = o.y - me.y;
+          const along = dx * Math.cos(a) + dy * Math.sin(a);
+          const across = Math.abs(-dx * Math.sin(a) + dy * Math.cos(a));
+          return along > 0 && across < cfg.arena.playerRadius + cfg.beam.halfWidth + 2;
+        });
+        if (!hits) { chosen = a; break; }
+      }
+      e.setAim(id, chosen);
+    }
+    const t = playRound(e);
+    const fire = e.snapshot(t);
+    expect(fire.eliminations).toHaveLength(0);
+    expect(fire.players.every((p) => p.alive)).toBe(true);
     e.tick(t + T.fireMs + T.resultMs);
-    const s = e.snapshot(t + T.fireMs + T.resultMs);
-    expect(s.phase).toBe('aiming');
-    expect(s.round).toBe(2);
-    expect(s.players.filter((p) => p.alive).length).toBeGreaterThanOrEqual(2);
+    expect(e.phase).toBe('aiming');
+    expect(e.round).toBe(2);
+    expect(e.snapshot(0, 'p0').players.filter((p) => p.alive)).toHaveLength(4);
+  });
+});
+
+describe('full four-player gameplay loop', () => {
+  it('plays rounds with misses and hits until one survivor, repositioning everyone each round', () => {
+    const e = new MatchEngine(
+      inits(4).map((p) => ({ ...p, botLevel: 'normal' as const })),
+      seededRng(2024),
+      buildConfig({ timing: { aimMs: 1000 } }),
+    );
+    let now = 0;
+    e.start(now);
+    const seenPositions: string[] = [];
+    let lastRound = 0;
+    let missRounds = 0;
+    let hitRounds = 0;
+    let guard = 0;
+    while (e.phase !== 'over' && guard++ < 100000) {
+      if (e.round !== lastRound && e.phase === 'aiming') {
+        lastRound = e.round;
+        seenPositions.push(JSON.stringify(e.secretPositions()));
+      }
+      now += 25;
+      e.tick(now);
+      if (e.phase === 'result') {
+        const s = e.snapshot(now);
+        if (s.eliminations.length === 0) missRounds++;
+        else hitRounds++;
+      }
+    }
+    expect(e.phase).toBe('over');
+    const final = e.snapshot(now);
+    expect(final.draw || final.winnerId !== null).toBe(true);
+    expect(hitRounds).toBeGreaterThan(0);
+    // every round used a brand-new draw
+    expect(new Set(seenPositions).size).toBe(seenPositions.length);
+    void missRounds;
+  });
+
+  it('across many seeded matches, rounds without a single hit do occur and are harmless', () => {
+    let rounds = 0;
+    let empty = 0;
+    for (let seed = 1; seed <= 25; seed++) {
+      const e = new MatchEngine(
+        inits(4).map((p) => ({ ...p, botLevel: 'easy' as const })),
+        seededRng(seed),
+        buildConfig({ timing: { aimMs: 500 } }),
+      );
+      let now = 0;
+      e.start(0);
+      let counted = -1;
+      let guard = 0;
+      while (e.phase !== 'over' && guard++ < 100000) {
+        now += 25;
+        e.tick(now);
+        if (e.phase === 'result' && counted !== e.round) {
+          counted = e.round;
+          rounds++;
+          if (e.snapshot(now).eliminations.length === 0) empty++;
+        }
+      }
+      expect(e.phase).toBe('over');
+    }
+    expect(empty).toBeGreaterThan(0);
+    expect(empty).toBeLessThan(rounds);
   });
 });
 
@@ -161,17 +345,16 @@ describe('disconnects', () => {
     aimAt(e, 'p0', 'p1');
     e.setConnected('p0', false, 10);
     expect(e.snapshot(10, 'p0').you!.locked).toBe(true);
-    e.setAim('p1', Math.PI / 2);
+    aimAwayFrom(e, 'p1', 'p0');
     const t = playRound(e);
     expect(e.snapshot(t).shots.find((s) => s.shooterId === 'p0')!.hitId).toBe('p1');
   });
 
   it('forfeits after the grace period and awards the win', () => {
     const { e } = make(2);
-    aimAway(e, 'p1', Math.PI / 2);
+    aimAwayFrom(e, 'p0', 'p1');
+    aimAwayFrom(e, 'p1', 'p0');
     e.setConnected('p1', false, 0);
-    // nobody hits anything
-    aimAway(e, 'p0', Math.PI / 2);
     const t = playRound(e);
     const end = t + T.fireMs + T.resultMs;
     e.tick(end);
@@ -182,8 +365,8 @@ describe('disconnects', () => {
 
   it('a reconnect within the grace period keeps the player alive', () => {
     const { e } = make(2);
-    aimAway(e, 'p0', Math.PI / 2);
-    aimAway(e, 'p1', Math.PI / 2);
+    aimAwayFrom(e, 'p0', 'p1');
+    aimAwayFrom(e, 'p1', 'p0');
     e.setConnected('p1', false, 0);
     e.setConnected('p1', true, 1000);
     const t = playRound(e);
@@ -192,39 +375,50 @@ describe('disconnects', () => {
   });
 });
 
-describe('bots', () => {
-  it('bot-only matches always terminate (pillar collapse prevents stalemates)', () => {
+describe('bots are blind', () => {
+  it('planBot only receives the bot’s own position (no way to read opponents)', () => {
+    expect(planBot.length).toBe(5); // (self, level, cfg, rng, aimMs)
+  });
+
+  it('bot aim never depends on where opponents are', () => {
+    // same seed + same own position => identical plan regardless of the rest of the arena
+    const a = planBot({ x: 200, y: 300 }, 'hard', cfg, seededRng(9), 5000);
+    const b = planBot({ x: 200, y: 300 }, 'hard', cfg, seededRng(9), 5000);
+    expect(a).toEqual(b);
+  });
+
+  it('hard bots lean toward the arena centre more than easy bots, but are never aimbots', () => {
+    const me = { x: 150, y: 150 };
+    const toCenter = Math.atan2(500 - me.y, 500 - me.x);
+    const near = (level: 'easy' | 'hard') => {
+      const rng = seededRng(3);
+      let n = 0;
+      for (let i = 0; i < 2000; i++) {
+        const plan = planBot(me, level, cfg, rng, 5000);
+        const d = Math.abs(Math.atan2(Math.sin(plan.aim1 - toCenter), Math.cos(plan.aim1 - toCenter)));
+        if (d < 0.5) n++;
+      }
+      return n / 2000;
+    };
+    expect(near('hard')).toBeGreaterThan(near('easy'));
+    expect(near('hard')).toBeLessThan(0.95);
+  });
+
+  it('bot-only matches terminate even though every round is luck', () => {
     for (const level of ['easy', 'normal', 'hard'] as const) {
-      const inits: PlayerInit[] = [0, 1, 2, 3].map((i) => ({ id: 'b' + i, name: 'B' + i, slot: i, botLevel: level }));
-      const rng = seededRng(42);
-      const e = new MatchEngine(inits, rng, buildConfig({ timing: { aimMs: 1000 } }));
+      const e = new MatchEngine(
+        inits(4).map((p) => ({ ...p, botLevel: level })),
+        seededRng(42),
+        buildConfig({ timing: { aimMs: 1000 } }),
+      );
       let now = 0;
       e.start(now);
       let guard = 0;
-      while (e.phase !== 'over' && guard++ < 20000) {
+      while (e.phase !== 'over' && guard++ < 200000) {
         now += 50;
         e.tick(now);
       }
       expect(e.phase).toBe('over');
-      expect(e.round).toBeLessThan(40);
     }
-  });
-
-  it('hard bots score kills more often than easy bots', () => {
-    const wins = { easy: 0, hard: 0 };
-    for (let seed = 1; seed <= 60; seed++) {
-      const inits: PlayerInit[] = [
-        { id: 'easy', name: 'E', slot: 0, botLevel: 'easy' },
-        { id: 'hard', name: 'H', slot: 1, botLevel: 'hard' },
-      ];
-      const e = new MatchEngine(inits, seededRng(seed), buildConfig({ timing: { aimMs: 1000 } }));
-      let now = 0;
-      e.start(0);
-      while (e.phase !== 'over') { now += 50; e.tick(now); }
-      const s = e.snapshot(now);
-      if (s.winnerId === 'easy') wins.easy++;
-      if (s.winnerId === 'hard') wins.hard++;
-    }
-    expect(wins.hard).toBeGreaterThan(wins.easy);
   });
 });

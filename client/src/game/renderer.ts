@@ -23,7 +23,8 @@ interface Beam {
   bounceDone: boolean[];
   muzzled: boolean;
 }
-interface PStateR { x: number; y: number; wa: number; seed: number; dead: boolean; deadAt: number; init: boolean }
+/** vis: 0..1 fade used for the vanish / reveal transitions. posRound: the round `x,y` belong to. */
+interface PStateR { x: number; y: number; wa: number; seed: number; dead: boolean; deadAt: number; init: boolean; vis: number; posRound: number }
 
 export interface RendererHooks {
   onFire?: () => void;
@@ -52,7 +53,6 @@ export class Renderer {
   private shakeAmp = 0;
   private flash = 0;
   private flashColor = '#ffffff';
-  private pillarShown = CFG.arena.pillarBase;
   private bannerText = '';
   private bannerAt = 0;
   private lastPhase = '';
@@ -138,14 +138,6 @@ export class Renderer {
       g.moveTo(0, p); g.lineTo(ARENA, p);
       g.stroke();
     }
-    // centre rings
-    g.strokeStyle = 'rgba(157,107,255,0.12)';
-    g.lineWidth = 2;
-    for (const r of [150, 260, 360]) { g.beginPath(); g.arc(500, 500, r, 0, TAU); g.stroke(); }
-    g.setLineDash([6, 14]);
-    g.strokeStyle = 'rgba(157,107,255,0.1)';
-    g.beginPath(); g.arc(500, 500, CFG.arena.spawnRadius, 0, TAU); g.stroke();
-    g.setLineDash([]);
     // neon border
     const edge = (w: number, a: number) => {
       g.lineWidth = w;
@@ -219,16 +211,43 @@ export class Renderer {
       if (labels[snap.phase]) { this.bannerText = labels[snap.phase]; this.bannerAt = now; }
     }
 
+    const reveal = snap.phase === 'fire' || snap.phase === 'result' || snap.phase === 'over';
+    const reduced = getSettings().reducedMotion;
     for (const p of snap.players) {
       let s = this.ps.get(p.id);
+      const col = CFG.colors[p.slot % 4];
       if (!s) {
-        s = { x: p.x, y: p.y, wa: Math.atan2(500 - p.y, 500 - p.x), seed: Math.random() * 100, dead: false, deadAt: 0, init: false };
+        s = { x: 0, y: 0, wa: 0, seed: Math.random() * 100, dead: false, deadAt: 0, init: false, vis: 0, posRound: -1 };
         this.ps.set(p.id, s);
       }
-      if (!s.init) { s.init = true; s.x = p.x; s.y = p.y; }
-      const k = 1 - Math.exp(-dt * 9);
-      s.x += (p.x - s.x) * k;
-      s.y += (p.y - s.y) * k;
+      const isMe = p.id === this.session.youId;
+      const known = p.x !== undefined && p.y !== undefined;
+      if (known && s.posRound !== snap.round) {
+        // New round, new (server-chosen) position: teleport instead of sliding.
+        if (isMe && s.init && s.vis > 0.05 && !reduced) {
+          this.pulse(s.x, s.y, col.hex, now, R * 0.5, R * 2.8, 340, 4);
+          this.burst(s.x, s.y, col.glow, 12, 300, 0.4, 2.6);
+        }
+        s.x = p.x!;
+        s.y = p.y!;
+        s.posRound = snap.round;
+        s.init = true;
+        if (isMe) {
+          s.vis = 0;
+          if (!reduced) {
+            this.pulse(s.x, s.y, '#ffffff', now, R * 2.6, R * 0.6, 300, 3);
+            this.pulse(s.x, s.y, col.hex, now, 4, R * 1.8, 360, 0, true);
+            this.burst(s.x, s.y, col.glow, 14, 320, 0.45, 2.6);
+          }
+        } else {
+          // opponent revealed by the volley
+          s.vis = 0.45;
+          if (!reduced) this.pulse(s.x, s.y, col.glow, now, R * 0.6, R * 2.2, 300, 3);
+        }
+      }
+      const show = known && (isMe || reveal);
+      s.vis += ((show ? 1 : 0) - s.vis) * (1 - Math.exp(-dt * (show ? 12 : 9)));
+      if (s.vis < 0.01 && !show) s.vis = 0;
       if (!p.alive && snap.phase !== 'fire' && !s.dead) { s.dead = true; s.deadAt = -1e9; }
     }
 
@@ -298,7 +317,7 @@ export class Renderer {
         }
         if (!late) {
           this.burst(ex, ey, b.glow, b.shot.hitId ? 18 : 10, 380, 0.45, 2.8);
-          this.pulse(ex, ey, b.glow, now, 4, b.shot.end === 'pillar' ? 40 : 28, 240, 3);
+          this.pulse(ex, ey, b.glow, now, 4, 28, 240, 3);
         }
       }
     }
@@ -335,13 +354,10 @@ export class Renderer {
     const snap = view?.snap;
     if (!snap || !view) { this.drawIdle(now); return; }
 
-    // pillar (animated shrink)
-    this.pillarShown += (snap.pillarR - this.pillarShown) * (1 - Math.exp(-dt * 4));
-    this.drawPillar(now);
     this.drawTimer(now, snap, view.endsAt);
 
     const me = snap.players.find((p) => p.id === this.session.youId);
-    if (me && me.alive && snap.phase === 'aiming') this.drawAimGuide(now, snap, me);
+    if (me && me.alive && me.x !== undefined && me.y !== undefined && (snap.phase === 'aiming' || snap.phase === 'lock')) this.drawAimGuide(now, { id: me.id, x: me.x, y: me.y, slot: me.slot });
 
     // beams below bodies? draw above for impact clarity
     this.drawPlayers(now, dt, snap);
@@ -378,23 +394,6 @@ export class Renderer {
     g.beginPath(); g.arc(500, 500, 60 + Math.sin(now / 400) * 6, 0, TAU); g.stroke();
   }
 
-  private drawPillar(now: number): void {
-    const r = this.pillarShown;
-    if (r < 1.5) return;
-    const g = this.ctx;
-    const pulse = 0.65 + Math.sin(now / 500) * 0.2;
-    g.fillStyle = 'rgba(157,107,255,0.08)';
-    g.beginPath(); g.arc(500, 500, r + 14, 0, TAU); g.fill();
-    g.fillStyle = '#0c1226';
-    g.beginPath(); g.arc(500, 500, r, 0, TAU); g.fill();
-    g.strokeStyle = `rgba(190,150,255,${pulse})`;
-    g.lineWidth = 4;
-    g.stroke();
-    g.strokeStyle = 'rgba(157,107,255,0.35)';
-    g.lineWidth = 1.5;
-    g.beginPath(); g.arc(500, 500, Math.max(2, r * 0.6), 0, TAU); g.stroke();
-  }
-
   private drawTimer(now: number, snap: NonNullable<GameSession['view']>['snap'], endsAt: number): void {
     if (snap.phase !== 'aiming') return;
     const g = this.ctx;
@@ -423,13 +422,13 @@ export class Renderer {
     g.restore();
   }
 
-  private drawAimGuide(now: number, snap: NonNullable<GameSession['view']>['snap'], me: { id: string; x: number; y: number; slot: number }): void {
+  private drawAimGuide(now: number, me: { id: string; x: number; y: number; slot: number }): void {
     const g = this.ctx;
     const ang = this.session.aim;
     const locked = this.session.locked;
     const col = CFG.colors[me.slot % 4];
-    const targets = snap.players.filter((p) => p.alive).map((p) => ({ id: p.id, x: p.x, y: p.y }));
-    const tr = traceBeam(me.x, me.y, ang, targets, me.id, snap.pillarR, CFG);
+    // Private preview: a straight line to the wall. It deliberately knows nothing about opponents.
+    const tr = traceBeam(me.x, me.y, ang, [], me.id, CFG);
     const pts = tr.points;
     g.save();
     g.lineCap = 'round';
@@ -461,28 +460,27 @@ export class Renderer {
     g.moveTo(rx + Math.cos(ang) * 13, ry + Math.sin(ang) * 13);
     g.lineTo(rx + Math.cos(ang) * 22, ry + Math.sin(ang) * 22);
     g.stroke();
-    // endpoint marker
+    // endpoint marker (wall)
     const ex = pts[pts.length - 2], ey = pts[pts.length - 1];
-    g.globalAlpha = 0.9;
-    g.strokeStyle = tr.hitId ? '#ffffff' : col.glow;
-    g.beginPath(); g.arc(ex, ey, tr.hitId ? 12 : 6, 0, TAU); g.stroke();
+    g.globalAlpha = 0.7;
+    g.strokeStyle = col.glow;
+    g.beginPath(); g.arc(ex, ey, 6, 0, TAU); g.stroke();
     g.restore();
   }
 
   private drawPlayers(now: number, dt: number, snap: NonNullable<GameSession['view']>['snap']): void {
     const g = this.ctx;
-    const firing = snap.phase === 'fire' || snap.phase === 'result' || snap.phase === 'over';
     for (const p of snap.players) {
       const s = this.ps.get(p.id);
-      if (!s) continue;
+      if (!s || s.vis <= 0.01) continue; // hidden: nothing at all is drawn
       const col = CFG.colors[p.slot % 4];
       const isMe = p.id === this.session.youId;
       let deadT = 0;
       if (s.dead) {
         deadT = (now - s.deadAt) / 650;
         if (deadT >= 1) {
-          // faint wreck marker
-          g.globalAlpha = 0.28;
+          // faint wreck marker, only while the reveal is on screen
+          g.globalAlpha = 0.28 * s.vis;
           g.strokeStyle = col.hex;
           g.lineWidth = 3;
           g.beginPath();
@@ -493,23 +491,17 @@ export class Renderer {
           continue;
         }
       }
-      // weapon target angle
-      let target: number;
-      const shot = firing ? snap.shots.find((sh) => sh.shooterId === p.id) : undefined;
+      // weapon angle: only my own is ever known before the reveal
+      const shot = snap.shots.find((sh) => sh.shooterId === p.id);
+      let target = s.wa;
       let rate = 14;
-      if (isMe && snap.phase === 'aiming') { target = this.session.aim; rate = 60; }
-      else if (shot) { target = shot.angle; rate = 40; }
-      else if (snap.phase === 'lock') { target = s.wa + dt * 16; rate = 0; } // spin-up: reveals nothing
+      if (shot) { target = shot.angle; rate = 40; }
       else if (isMe) { target = this.session.aim; rate = 60; }
-      else target = s.seed + Math.sin(now / 900 + s.seed) * 1.3 + Math.sin(now / 370 + s.seed * 2) * 0.6; // decoy sweep
-      if (rate === 0) s.wa = target;
-      else {
-        const d = Math.atan2(Math.sin(target - s.wa), Math.cos(target - s.wa));
-        s.wa += d * (1 - Math.exp(-dt * rate));
-      }
+      const d = Math.atan2(Math.sin(target - s.wa), Math.cos(target - s.wa));
+      s.wa += d * (1 - Math.exp(-dt * rate));
 
       const bob = Math.sin(now / 420 + s.seed) * 1.4;
-      const fade = s.dead ? 1 - deadT : 1;
+      const fade = s.vis * (s.dead ? 1 - deadT : 1);
       const sc = s.dead ? 1 + deadT * 0.5 : 1;
       g.save();
       g.translate(s.x, s.y + bob);
@@ -521,8 +513,8 @@ export class Renderer {
       gl.addColorStop(1, hexA(col.hex, 0));
       g.fillStyle = gl;
       g.beginPath(); g.arc(0, 0, R * 2.3, 0, TAU); g.fill();
-      // locked ring
-      if (p.locked && snap.phase === 'aiming') {
+      // locked ring (only ever shown for myself)
+      if (isMe && this.session.locked && (snap.phase === 'aiming' || snap.phase === 'lock')) {
         g.save();
         g.rotate(now / 700);
         g.strokeStyle = col.glow;

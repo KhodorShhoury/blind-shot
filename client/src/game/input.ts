@@ -23,7 +23,7 @@ export class InputManager {
 
   private aimFrom(clientX: number, clientY: number): void {
     const me = this.session.me;
-    if (!me || !me.alive || this.session.view?.snap.phase !== 'aiming') return;
+    if (!me || !me.alive || me.x === undefined || me.y === undefined || this.session.view?.snap.phase !== 'aiming') return;
     const p = this.renderer.toArena(clientX, clientY);
     const dx = p.x - me.x;
     const dy = p.y - me.y;

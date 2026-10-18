@@ -1,10 +1,10 @@
 import { Button } from './common';
 
 const steps = [
-  ['1', 'Aim in secret', 'Everyone picks a firing direction at the same time. Your aim is private — rivals only see their own. Rival gun barrels sweep randomly until the reveal.'],
-  ['2', 'Lock it in', 'Click / press Space (or use the stick and LOCK button on phones) to commit. You can unlock and re-aim until the timer ends or all players have locked.'],
-  ['3', 'Fire together', 'All lasers fire at the same instant. Beams bounce off the arena walls up to twice, stop at the first player they hit, and are absorbed by the central pillar.'],
-  ['4', 'Last one standing', 'Players hit by a laser are out — even if they fired in the same volley. Survivors are repositioned fairly each round and the pillar slowly collapses. Everyone down at once is a draw.'],
+  ['1', 'Vanish & scatter', 'Every round the server drops every survivor at a brand-new random spot, then hides everyone. You only see yourself — nobody can see anyone else, and nobody gets any hint where they are.'],
+  ['2', 'Aim blind', 'Spin your laser through 360° and pick a direction on pure instinct. Your aim is private. Click / press Space (or use the stick and LOCK button on phones) to commit; you can re-aim until the timer ends.'],
+  ['3', 'Fire together', 'When the countdown hits zero every laser fires at the same instant, in a straight line to the wall. Anyone a beam touches is out — even if they fired in the same volley. The arena then lights up to show who hit whom.'],
+  ['4', 'Last one standing', 'If nobody was hit, everyone is scattered again and a new round starts. One survivor wins; everyone down at once is a draw.'],
 ];
 
 export function HowTo({ onBack }: { onBack: () => void }) {
@@ -23,9 +23,9 @@ export function HowTo({ onBack }: { onBack: () => void }) {
         <div className="tips">
           <b>Pro tips</b>
           <ul>
-            <li>The dashed preview shows exactly where your laser will travel, bounces included.</li>
-            <li>Direct lines across the arena are often blocked — bank shots off the walls can win rounds.</li>
-            <li>Opponents that locked early show a rotating ring. Read the room, then bluff.</li>
+            <li>There is no radar and no aim assist — it is a game of nerve and luck.</li>
+            <li>Positions are re-rolled every round, so what you saw last round tells you nothing.</li>
+            <li>Aiming through the middle of the arena covers the most ground; aiming at a nearby wall rarely hits anything.</li>
           </ul>
         </div>
         <Button variant="primary" onClick={onBack}>Back</Button>

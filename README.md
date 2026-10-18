@@ -30,28 +30,37 @@ npm run dev:client   # Vite on :5173
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | server + client with hot reload |
-| `npm test` | 36 unit + integration tests (Vitest) |
+| `npm test` | 49 unit + integration tests (Vitest) |
 | `npm run typecheck` | strict TypeScript across shared/server/client |
 | `npm run build` | production builds → `server/dist`, `client/dist` |
 | `npm start` | run the built server (`node server/dist/index.js`) |
 
 ## How the game plays
 
-1. **Aiming (8 s)** – move the mouse (or use the touch stick). Your aim is private. A dashed preview shows your beam path, wall bounces included. Click / `Space` / the LOCK button locks it; click again to unlock. If you never lock, your latest angle is used. If everyone locks, the phase ends early after a short grace period.
-2. **Lock (0.6 s)** – aims freeze; opponents' barrels spin (revealing nothing).
-3. **Fire (1.5 s)** – the server resolves all shots at once against the roster that was alive at the start of the volley, so a player killed in the same volley still fires.
-4. **Result (2.3 s)** – who eliminated whom; survivors are re-spawned in a fair, rotated, shuffled formation.
+Blind Shot is a game of nerve and luck. **Nobody can see anybody else.**
 
-Rules of the beam: it has thickness, **bounces off the arena walls up to twice**, stops at the **nearest** player it touches (never its owner), and is **absorbed by the central pillar**. The pillar shrinks every round and is gone by round 6, which guarantees matches always finish. Everyone dying in the same volley is a **draw**.
+1. **Scatter & vanish** – at the start of *every* round the server drops each survivor at a fresh, independent random spot (wall margin + minimum spacing enforced) and hides everyone. You only see yourself.
+2. **Aiming (5 s)** – spin your laser through 360° (mouse or touch stick) and choose a direction on instinct. Your aim and preview are private; the preview is a plain line to the wall and knows nothing about opponents. Click / `Space` / LOCK commits; click again to unlock. If everyone locks, the phase ends early after a short grace period.
+3. **Lock (0.6 s)** – aims freeze.
+4. **Fire (1.5 s)** – the countdown hit zero: every laser fires at the same instant in a straight line to the arena boundary. The server resolves all shots from the same pre-fire snapshot against the secret positions, so a player killed in the volley still fires. Now everyone is revealed and the lasers / hits play out.
+5. **Result (2.3 s)** – who hit whom. If nobody was hit, that is a perfectly valid round: everyone is re-scattered and a new countdown starts. Eliminated players stay out until the next match.
+
+One survivor wins; everyone dying in the same volley is a **draw**; a rematch can be voted on after the match.
+
+There is no movement during aiming, no radar, no aim assist, no enemy indicators and no guaranteed hit. Bots are blind too – they only know their own position.
+
+### Secrecy is enforced on the server
+
+`MatchEngine.snapshot(now, forId)` is the only thing sent to clients. During the aiming and lock phases it contains **only the receiving player's own x/y**; opponents' coordinates, aims, shots and eliminations are simply absent. Positions are included only once the volley fires (and only for the players who took part in it). The next round's positions are generated server-side and again withheld until that round's reveal. (Offline practice mode runs the engine in your own browser, so there the "server" is local.)
 
 ## Architecture
 
 ```
 shared/src     Pure TypeScript used by BOTH client and server
   config.ts      every timing, colour, arena size, bot parameter (override with buildConfig)
-  geometry.ts    laser tracing (thickness, bounces, nearest hit), formations, pillar rule
+  geometry.ts    straight laser tracing (thickness, nearest hit), random spawn generation
   engine.ts      MatchEngine – phase state machine, volley resolution, per-player snapshots
-  bots.ts        bot planning (angle scan, threat memory, difficulty noise, "second thoughts")
+  bots.ts        blind bot planning (own position only; difficulty = centre bias / timing)
   protocol.ts    event names, payload types, validators, rate limiter
 server/src
   server.ts      HTTP + Socket.IO factory (CORS, /healthz)
@@ -89,7 +98,7 @@ Server (`server/.env.example`; set as real environment variables on your host):
 | `CLIENT_ORIGIN` | comma-separated allowed origins, e.g. `https://blind-shot.vercel.app`. Empty = allow any (dev only) |
 | `AIM_MS`, `LOCK_MS`, `FIRE_MS`, `RESULT_MS` | optional timing overrides |
 
-Gameplay constants (arena size, spawn radius, beam width/bounces/speed, colours, bot skill) live in `shared/src/config.ts`.
+Gameplay constants (arena size, spawn margin & spacing, beam width/speed, colours, bot skill) live in `shared/src/config.ts`.
 
 ## Deployment
 
@@ -121,8 +130,8 @@ Deploy. Finally set `CLIENT_ORIGIN` on the backend to the Vercel domain (and any
 
 `npm test` runs:
 
-- **geometry** – hits, nearest-target rule, beam thickness, wall bounces, pillar absorption, owner immunity, formations
-- **engine** – phase flow, early lock, secrecy, simultaneous volleys, same-volley kills, multi-kill, draws, standings, disconnects/forfeit/reconnect, bot-only matches terminate, hard bots beat easy bots
+- **geometry** – hits, nearest-target rule, beam thickness, owner immunity, random spawns (bounds, spacing, independence, fairness)
+- **engine** – phase flow, early lock, hidden positions & aims, simultaneous volleys, no-hit rounds, four-player loop, same-volley kills, multi-kill, draws, standings, disconnects/forfeit/reconnect, blind bots (own position only), bot-only matches terminate
 - **protocol** – validators and rate limiter
 - **server integration (real Socket.IO)** – 2/4-player rooms, capacity, host-only start, ready gating, host transfer, room cleanup, full match with secrecy checks, rematch, disconnect + token rejoin, forfeit, malformed/flooded input
 

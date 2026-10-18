@@ -1,5 +1,5 @@
 import { DEFAULT_CONFIG, type BotLevel, type GameConfig, type Rng } from './config';
-import { distToPolyline, formation, pillarRadius, traceBeam, normAngle } from './geometry';
+import { randomSpawns, traceBeam, normAngle } from './geometry';
 import { planBot, type BotPlan } from './bots';
 
 export type Phase = 'aiming' | 'lock' | 'fire' | 'result' | 'over';
@@ -17,7 +17,7 @@ export interface Shot {
   angle: number;
   points: number[];
   hitId: string | null;
-  end: 'player' | 'pillar' | 'range';
+  end: 'player' | 'range';
 }
 
 export interface Elimination {
@@ -29,8 +29,12 @@ export interface PublicPlayer {
   id: string;
   name: string;
   slot: number;
-  x: number;
-  y: number;
+  /**
+   * Arena position. Hidden information: during the aiming/lock phases the server only fills this in
+   * for the receiving player's OWN entry. Everyone's position is revealed only once the volley fires.
+   */
+  x?: number;
+  y?: number;
   alive: boolean;
   locked: boolean;
   connected: boolean;
@@ -45,13 +49,12 @@ export interface Standing {
   eliminatedRound: number | null;
 }
 
-/** Everything a client is allowed to know. Other players' aim angles are NEVER part of this. */
+/** Everything a client is allowed to know. Other players' aim angles and (before the reveal) positions are NEVER part of this. */
 export interface MatchSnapshot {
   phase: Phase;
   round: number;
   remainingMs: number;
   phaseMs: number;
-  pillarR: number;
   players: PublicPlayer[];
   you?: { aim: number; locked: boolean };
   shots: Shot[];
@@ -79,7 +82,6 @@ interface PState {
   eliminatedRound: number | null;
   plan: BotPlan | null;
   switched: boolean;
-  threat: Record<string, number>;
 }
 
 export class MatchEngine {
@@ -90,10 +92,11 @@ export class MatchEngine {
   private phaseStart = 0;
   private phaseEnd = 0;
   private roundStart = 0;
+  /** Players who were positioned at the start of the current round (i.e. who take part in its volley). */
+  private roundRoster = new Set<string>();
   private allLockedSince: number | null = null;
   private shots: Shot[] = [];
   private eliminations: Elimination[] = [];
-  private pillarR = 0;
   private winnerId: string | null = null;
   private draw = false;
   private started = false;
@@ -121,7 +124,6 @@ export class MatchEngine {
       eliminatedRound: null,
       plan: null,
       switched: false,
-      threat: {},
     }));
   }
 
@@ -177,23 +179,22 @@ export class MatchEngine {
       this.finish(now);
       return;
     }
-    const spots = formation(alive.length, this.cfg, this.rng);
-    this.pillarR = pillarRadius(this.round, this.cfg);
-    const cx = this.cfg.arena.w / 2;
-    const cy = this.cfg.arena.h / 2;
+    // Fresh, independent random positions every round (generated here, on the authoritative side only).
+    const spots = randomSpawns(alive.length, this.cfg, this.rng);
     alive.forEach((p, i) => {
       p.x = spots[i].x;
       p.y = spots[i].y;
-      p.aim = Math.atan2(cy - p.y, cx - p.x);
+      // neutral starting angle: gives no hint about where anybody is
+      p.aim = this.rng() * Math.PI * 2 - Math.PI;
       p.locked = !p.connected;
       p.switched = false;
       p.plan = null;
     });
-    const targets = alive.map((p) => ({ id: p.id, x: p.x, y: p.y }));
     for (const p of alive) {
       if (!p.botLevel) continue;
-      p.plan = planBot({ id: p.id, x: p.x, y: p.y }, targets, this.pillarR, p.botLevel, p.threat, this.cfg, this.rng, this.cfg.timing.aimMs);
+      p.plan = planBot({ x: p.x, y: p.y }, p.botLevel, this.cfg, this.rng, this.cfg.timing.aimMs);
     }
+    this.roundRoster = new Set(alive.map((p) => p.id));
     this.shots = [];
     this.eliminations = [];
     this.allLockedSince = null;
@@ -281,7 +282,7 @@ export class MatchEngine {
     const targets = shooters.map((p) => ({ id: p.id, x: p.x, y: p.y }));
     const kills = new Map<string, string[]>();
     this.shots = shooters.map((p) => {
-      const r = traceBeam(p.x, p.y, p.aim, targets, p.id, this.pillarR, this.cfg);
+      const r = traceBeam(p.x, p.y, p.aim, targets, p.id, this.cfg);
       if (r.hitId) {
         const list = kills.get(r.hitId) ?? [];
         list.push(p.id);
@@ -289,14 +290,6 @@ export class MatchEngine {
       }
       return { shooterId: p.id, angle: Math.round(p.aim * 1000) / 1000, points: r.points, hitId: r.hitId, end: r.end };
     });
-    // bots remember who came close to them
-    for (const b of shooters) {
-      if (!b.botLevel) continue;
-      for (const s of this.shots) {
-        if (s.shooterId === b.id) continue;
-        if (distToPolyline(s.points, b.x, b.y) < 90) b.threat[s.shooterId] = (b.threat[s.shooterId] ?? 0) + 1;
-      }
-    }
     this.eliminations = [];
     for (const [victimId, killerIds] of kills) {
       const v = this.find(victimId)!;
@@ -309,21 +302,30 @@ export class MatchEngine {
     this.onEvent('fire');
   }
 
+  /**
+   * Server/test-only: the secret positions of everyone who took part in the current round. Never put this in a payload.
+   */
+  secretPositions(): { id: string; x: number; y: number }[] {
+    return this.players.filter((p) => this.roundRoster.has(p.id)).map((p) => ({ id: p.id, x: p.x, y: p.y }));
+  }
+
   snapshot(now: number, forId?: string): MatchSnapshot {
     const me = forId ? this.find(forId) : undefined;
     const revealed = this.phase === 'fire' || this.phase === 'result' || this.phase === 'over';
+    // Before the reveal a player may only learn their own position (and only while they are alive).
+    // At the reveal, exactly the players who took part in the volley become visible.
+    const shown = new Set<string>(revealed ? this.shots.map((sh) => sh.shooterId) : []);
+    if (!revealed && me && me.alive) shown.add(me.id);
     return {
       phase: this.phase,
       round: this.round,
       remainingMs: Math.max(0, Math.round(this.phaseEnd - now)),
       phaseMs: Math.round(this.phaseEnd - this.phaseStart),
-      pillarR: this.pillarR,
       players: this.players.map((p) => ({
         id: p.id,
         name: p.name,
         slot: p.slot,
-        x: p.x,
-        y: p.y,
+        ...(shown.has(p.id) ? { x: p.x, y: p.y } : {}),
         alive: p.alive,
         locked: p.locked,
         connected: p.connected,

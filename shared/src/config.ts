@@ -4,12 +4,11 @@ export interface GameConfig {
   arena: {
     w: number;
     h: number;
-    spawnRadius: number;
     playerRadius: number;
-    /** Radius of the central pillar in round 1; shrinks every round. */
-    pillarBase: number;
-    /** Round at which the pillar has fully collapsed (guarantees the match makes progress). */
-    pillarCollapseRound: number;
+    /** Minimum distance between a player's centre and the arena walls when spawning. */
+    spawnMargin: number;
+    /** Minimum distance between two players' centres when spawning (relaxed only if placement keeps failing). */
+    minPlayerDist: number;
   };
   beam: {
     halfWidth: number;
@@ -40,13 +39,17 @@ export interface GameConfig {
     maxRooms: number;
   };
   colors: { name: string; hex: string; glow: string }[];
-  bots: Record<BotLevel, { noiseDeg: number; wildChance: number; lockMin: number; lockMax: number; rethink: number }>;
+  /**
+   * Bots are blind too: they only know their own position. `centerBias` is the chance they aim roughly
+   * through the middle of the arena (where more opponents tend to be), within +-`spreadDeg`.
+   */
+  bots: Record<BotLevel, { centerBias: number; spreadDeg: number; lockMin: number; lockMax: number; rethink: number }>;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  arena: { w: 1000, h: 1000, spawnRadius: 360, playerRadius: 24, pillarBase: 70, pillarCollapseRound: 6 },
-  beam: { halfWidth: 4, maxBounces: 2, maxLength: 3600, speed: 7000 },
-  timing: { aimMs: 8000, lockMs: 600, fireMs: 1500, resultMs: 2300, allLockedGraceMs: 900, warnMs: 3000 },
+  arena: { w: 1000, h: 1000, playerRadius: 40, spawnMargin: 80, minPlayerDist: 150 },
+  beam: { halfWidth: 14, maxBounces: 0, maxLength: 3600, speed: 7000 },
+  timing: { aimMs: 5000, lockMs: 600, fireMs: 1500, resultMs: 2300, allLockedGraceMs: 900, warnMs: 3000 },
   room: {
     minPlayers: 2,
     maxPlayers: 4,
@@ -64,9 +67,9 @@ export const DEFAULT_CONFIG: GameConfig = {
     { name: 'Green', hex: '#39ff88', glow: '#8bffb9' },
   ],
   bots: {
-    easy: { noiseDeg: 9, wildChance: 0.25, lockMin: 0.7, lockMax: 0.95, rethink: 0.3 },
-    normal: { noiseDeg: 3.2, wildChance: 0.08, lockMin: 0.45, lockMax: 0.85, rethink: 0.25 },
-    hard: { noiseDeg: 0.9, wildChance: 0.02, lockMin: 0.3, lockMax: 0.8, rethink: 0.12 },
+    easy: { centerBias: 0, spreadDeg: 60, lockMin: 0.7, lockMax: 0.95, rethink: 0.3 },
+    normal: { centerBias: 0.45, spreadDeg: 55, lockMin: 0.45, lockMax: 0.85, rethink: 0.25 },
+    hard: { centerBias: 0.8, spreadDeg: 45, lockMin: 0.3, lockMax: 0.8, rethink: 0.12 },
   },
 };
 
