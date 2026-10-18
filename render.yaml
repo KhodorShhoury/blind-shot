@@ -1,0 +1,14 @@
+# Render Blueprint — persistent Node.js WebSocket backend
+services:
+  - type: web
+    name: blind-shot-server
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build -w server
+    startCommand: npm run start -w server
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: CLIENT_ORIGIN
+        sync: false # set to your Vercel URL, e.g. https://blind-shot.vercel.app

@@ -1,0 +1,23 @@
+{
+  "name": "blind-shot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": ["client", "server"],
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c magenta,cyan \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w server && npm run build -w client",
+    "start": "npm run start -w server",
+    "typecheck": "tsc -p shared/tsconfig.json --noEmit && tsc -p server/tsconfig.json --noEmit && tsc -p client/tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.4",
+    "socket.io-client": "^4.8.1",
+    "@types/node": "^22.10.0"
+  }
+}
