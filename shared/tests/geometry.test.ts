@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildConfig, DEFAULT_CONFIG, seededRng } from '@shared/config';
-import { randomSpawns, traceBeam } from '@shared/geometry';
+import { buildConfig } from '@shared/config';
+import { traceBeam } from '@shared/geometry';
 
 const cfg = buildConfig();
 
@@ -53,55 +53,5 @@ describe('traceBeam', () => {
     const r = traceBeam(shooter.x, shooter.y, angle, [target], 'a', c);
     expect(r.bounces).toBe(1);
     expect(r.hitId).toBe('b');
-  });
-});
-
-describe('randomSpawns', () => {
-  const { w, h, spawnMargin, minPlayerDist, playerRadius } = DEFAULT_CONFIG.arena;
-
-  it('keeps every player inside the margin and apart from each other', () => {
-    for (let seed = 1; seed <= 300; seed++) {
-      for (const n of [2, 3, 4]) {
-        const pts = randomSpawns(n, DEFAULT_CONFIG, seededRng(seed * 7 + n));
-        expect(pts).toHaveLength(n);
-        for (const p of pts) {
-          expect(p.x).toBeGreaterThanOrEqual(spawnMargin);
-          expect(p.x).toBeLessThanOrEqual(w - spawnMargin);
-          expect(p.y).toBeGreaterThanOrEqual(spawnMargin);
-          expect(p.y).toBeLessThanOrEqual(h - spawnMargin);
-        }
-        for (let i = 0; i < n; i++)
-          for (let j = i + 1; j < n; j++) expect(Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y)).toBeGreaterThanOrEqual(minPlayerDist - 1);
-      }
-    }
-  });
-
-  it('is a fresh draw every time (no fixed pattern, no dependence on the previous call)', () => {
-    const rng = seededRng(99);
-    const seen = new Set<string>();
-    for (let i = 0; i < 50; i++) seen.add(JSON.stringify(randomSpawns(4, DEFAULT_CONFIG, rng)));
-    expect(seen.size).toBe(50);
-  });
-
-  it('covers the whole arena fairly (no centre/corner bias)', () => {
-    const rng = seededRng(5);
-    const quad = [0, 0, 0, 0];
-    let total = 0;
-    for (let i = 0; i < 2000; i++) {
-      for (const p of randomSpawns(2, DEFAULT_CONFIG, rng)) {
-        quad[(p.x > w / 2 ? 1 : 0) + (p.y > h / 2 ? 2 : 0)]++;
-        total++;
-      }
-    }
-    for (const q of quad) expect(q / total).toBeGreaterThan(0.22);
-  });
-
-  it('still produces valid non-overlapping spots with a degenerate RNG (fallback grid)', () => {
-    for (const v of [0, 0.999999]) {
-      const pts = randomSpawns(4, DEFAULT_CONFIG, () => v);
-      expect(pts).toHaveLength(4);
-      for (let i = 0; i < 4; i++)
-        for (let j = i + 1; j < 4; j++) expect(Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y)).toBeGreaterThan(playerRadius * 2);
-    }
   });
 });

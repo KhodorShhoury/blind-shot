@@ -76,7 +76,7 @@ export function GameScreen({ session, onExit, onAgain }: Props) {
     if (phase === 'aiming') {
       if (!me?.alive) { status = 'You are eliminated — spectating'; tone = 'dead'; }
       else if (session.locked) { status = 'LOCKED — unlock to re-aim'; tone = 'locked'; }
-      else { status = showTouch ? 'Aim with the stick, then LOCK' : 'Move the mouse to aim · Click or Space to lock'; tone = 'aim'; }
+      else { status = showTouch ? 'Walk to your spot, aim, then LOCK' : 'WASD / arrows to walk · mouse to aim · click or Space to lock'; tone = 'aim'; }
     } else if (phase === 'lock') { status = 'Locking in…'; tone = 'locked'; }
     else if (phase === 'fire') { status = 'FIRE!'; tone = 'fire'; }
     else if (phase === 'result') { status = 'Results'; }
@@ -106,7 +106,8 @@ export function GameScreen({ session, onExit, onAgain }: Props) {
       <div className={`status ${tone}`}>{status}</div>
 
       <div className="controls">
-        {showTouch && canAim ? <Joystick session={session} /> : <span />}
+        {showTouch && canAim ? <Joystick session={session} mode="move" /> : <span />}
+        {showTouch && canAim ? <Joystick session={session} mode="aim" /> : <span />}
         {canAim && (
           <button
             className={`lock-btn ${session.locked ? 'on' : ''}`}

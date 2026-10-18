@@ -29,3 +29,16 @@ describe('validation', () => {
     expect(rl.take(1, 1000)).toBe(true);
   });
 });
+
+import { parseMove } from '@shared/protocol';
+
+describe('parseMove', () => {
+  it('accepts vectors and normalises anything longer than 1', () => {
+    expect(parseMove({ x: 0.5, y: -0.25 })).toEqual({ x: 0.5, y: -0.25 });
+    const v = parseMove({ x: 3, y: 4 })!;
+    expect(Math.hypot(v.x, v.y)).toBeCloseTo(1, 6);
+  });
+  it('rejects garbage', () => {
+    for (const bad of [null, undefined, 1, 'x', {}, { x: 1 }, { x: 'a', y: 0 }, { x: NaN, y: 0 }, { x: Infinity, y: 0 }, { x: 1e9, y: 0 }]) expect(parseMove(bad)).toBeNull();
+  });
+});

@@ -70,6 +70,12 @@ export class Renderer {
     this.resize();
   }
 
+  /** My smoothed on-screen position (what the aim preview and mouse aiming are anchored to). */
+  getPos(id: string): { x: number; y: number } | null {
+    const s = this.ps.get(id);
+    return s && s.init ? { x: s.x, y: s.y } : null;
+  }
+
   private onOrient = () => setTimeout(() => this.resize(), 120);
 
   start(): void {
@@ -224,7 +230,7 @@ export class Renderer {
       const known = p.x !== undefined && p.y !== undefined;
       if (known && s.posRound !== snap.round) {
         // New round, new (server-chosen) position: teleport instead of sliding.
-        if (isMe && s.init && s.vis > 0.05 && !reduced) {
+        if (isMe && s.init && s.vis > 0.05 && !reduced && Math.hypot(s.x - p.x!, s.y - p.y!) > 30) {
           this.pulse(s.x, s.y, col.hex, now, R * 0.5, R * 2.8, 340, 4);
           this.burst(s.x, s.y, col.glow, 12, 300, 0.4, 2.6);
         }
@@ -244,6 +250,12 @@ export class Renderer {
           s.vis = 0.45;
           if (!reduced) this.pulse(s.x, s.y, col.glow, now, R * 0.6, R * 2.2, 300, 3);
         }
+      }
+      // walking: glide towards the server's value (only my own position is ever updated mid-round)
+      if (known && isMe && s.posRound === snap.round) {
+        const k = 1 - Math.exp(-dt * 20);
+        s.x += (p.x! - s.x) * k;
+        s.y += (p.y! - s.y) * k;
       }
       const show = known && (isMe || reveal);
       s.vis += ((show ? 1 : 0) - s.vis) * (1 - Math.exp(-dt * (show ? 12 : 9)));
@@ -357,7 +369,7 @@ export class Renderer {
     this.drawTimer(now, snap, view.endsAt);
 
     const me = snap.players.find((p) => p.id === this.session.youId);
-    if (me && me.alive && me.x !== undefined && me.y !== undefined && (snap.phase === 'aiming' || snap.phase === 'lock')) this.drawAimGuide(now, { id: me.id, x: me.x, y: me.y, slot: me.slot });
+    if (me && me.alive && me.x !== undefined && me.y !== undefined && (snap.phase === 'aiming' || snap.phase === 'lock')) this.drawAimGuide(now, { id: me.id, x: this.ps.get(me.id)?.x ?? me.x, y: this.ps.get(me.id)?.y ?? me.y, slot: me.slot });
 
     // beams below bodies? draw above for impact clarity
     this.drawPlayers(now, dt, snap);

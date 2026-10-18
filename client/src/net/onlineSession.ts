@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import { C2S, S2C, type JoinAck, type LobbyState, type LockInfo } from '@shared/protocol';
+import { C2S, S2C, type JoinAck, type LobbyState, type LockInfo, type PosUpdate } from '@shared/protocol';
 import type { MatchSnapshot } from '@shared/engine';
 import { GameSession } from '../game/session';
 
@@ -65,6 +65,7 @@ export class OnlineSession extends GameSession {
       this.emit({ type: 'lobby' });
     });
     s.on(S2C.match, (m: { snapshot: MatchSnapshot }) => this.applySnapshot(m.snapshot));
+    s.on(S2C.pos, (m: PosUpdate) => this.setOwnPosition(m.round, m.x, m.y));
     s.on(S2C.lockInfo, (info: LockInfo) => {
       const snap = this.view?.snap;
       const p = snap?.players.find((x) => x.id === info.id);
@@ -180,6 +181,22 @@ export class OnlineSession extends GameSession {
     const since = performance.now() - this.lastSentAt;
     if (since >= 33) send();
     else if (!this.pending) this.pending = setTimeout(send, 33 - since);
+  }
+
+  private moveSent = { x: 0, y: 0, at: 0 };
+
+  setMove(dx: number, dy: number): void {
+    if (this.view?.snap.phase !== 'aiming') return;
+    const x = Math.round(dx * 100) / 100;
+    const y = Math.round(dy * 100) / 100;
+    const now = performance.now();
+    const stop = x === 0 && y === 0;
+    const same = x === this.moveSent.x && y === this.moveSent.y;
+    // never drop a "stop"; otherwise throttle (callers refresh the latest intent ~10x/s anyway)
+    if (!stop && ((same && now - this.moveSent.at < 100) || now - this.moveSent.at < 40)) return;
+    if (stop && same && now - this.moveSent.at < 100) return;
+    this.moveSent = { x, y, at: now };
+    this.socket.emit(C2S.move, { x, y });
   }
 
   setLocked(locked: boolean): void {

@@ -114,13 +114,12 @@ describe('secrecy: hidden positions and aims', () => {
     }
   });
 
-  it('the secret coordinates never appear anywhere in another player’s payload', () => {
+  it('the only coordinates in a player’s payload are their own', () => {
     const { e } = make(4, 7);
-    const secret = e.secretPositions();
-    const json = JSON.stringify(e.snapshot(0, 'p0'));
-    for (const q of secret.filter((s) => s.id !== 'p0')) {
-      expect(json).not.toContain(`"x":${q.x},`);
-      expect(json).not.toContain(`"y":${q.y}`);
+    for (const id of ['p0', 'p1', 'p2', 'p3']) {
+      const json = JSON.stringify(e.snapshot(0, id));
+      expect(json.match(/"x":/g)).toHaveLength(1);
+      expect(json.match(/"y":/g)).toHaveLength(1);
     }
     // spectator / server broadcast view has no coordinates at all
     expect(JSON.stringify(e.snapshot(0))).not.toMatch(/"x":/);
@@ -151,22 +150,20 @@ describe('secrecy: hidden positions and aims', () => {
     }
   });
 
-  it('hides everyone again in the next round, with positions nobody was told', () => {
+  it('hides everyone again in the next round; nobody is re-placed, everyone keeps their spot', () => {
     const { e } = make(4, 11);
     const before = e.secretPositions();
     const t = playRound(e);
     e.tick(t + T.fireMs + T.resultMs);
-    const alive = e.snapshot(0, 'p0');
     if (e.phase === 'aiming') {
-      expect(alive.round).toBe(2);
-      for (const p of alive.players) if (p.id !== 'p0') expect(p.x).toBeUndefined();
-      expect(alive.shots).toHaveLength(0);
-      expect(alive.eliminations).toHaveLength(0);
-      const after = e.secretPositions();
-      // an independent draw: nobody keeps their old spot
-      for (const a of after) {
-        const b = before.find((q) => q.id === a.id);
-        if (b) expect(a.x === b.x && a.y === b.y).toBe(false);
+      const s2 = e.snapshot(0, 'p0');
+      expect(s2.round).toBe(2);
+      for (const p of s2.players) if (p.id !== 'p0') expect(p.x).toBeUndefined();
+      expect(s2.shots).toHaveLength(0);
+      expect(s2.eliminations).toHaveLength(0);
+      for (const q of e.secretPositions()) {
+        const old = before.find((o) => o.id === q.id)!;
+        expect(q).toEqual(old);
       }
     }
   });
@@ -305,8 +302,8 @@ describe('full four-player gameplay loop', () => {
     const final = e.snapshot(now);
     expect(final.draw || final.winnerId !== null).toBe(true);
     expect(hitRounds).toBeGreaterThan(0);
-    // every round used a brand-new draw
-    expect(new Set(seenPositions).size).toBe(seenPositions.length);
+    // bots walk, so positions do change from round to round
+    expect(new Set(seenPositions).size).toBeGreaterThan(1);
     void missRounds;
   });
 
@@ -389,13 +386,13 @@ describe('bots are blind', () => {
 
   it('hard bots lean toward the arena centre more than easy bots, but are never aimbots', () => {
     const me = { x: 150, y: 150 };
-    const toCenter = Math.atan2(500 - me.y, 500 - me.x);
     const near = (level: 'easy' | 'hard') => {
       const rng = seededRng(3);
       let n = 0;
       for (let i = 0; i < 2000; i++) {
         const plan = planBot(me, level, cfg, rng, 5000);
-        const d = Math.abs(Math.atan2(Math.sin(plan.aim1 - toCenter), Math.cos(plan.aim1 - toCenter)));
+        const toC = Math.atan2(500 - plan.dest.y, 500 - plan.dest.x);
+        const d = Math.abs(Math.atan2(Math.sin(plan.aim1 - toC), Math.cos(plan.aim1 - toC)));
         if (d < 0.5) n++;
       }
       return n / 2000;
@@ -419,6 +416,133 @@ describe('bots are blind', () => {
         e.tick(now);
       }
       expect(e.phase).toBe('over');
+    }
+  });
+});
+
+function walk(e: MatchEngine, id: string, dx: number, dy: number, from: number, ms: number) {
+  let t = from;
+  const end = from + ms;
+  while (t < end) {
+    t += 25;
+    e.setMove(id, dx, dy, t);
+    e.tick(t);
+  }
+  return t;
+}
+
+describe('walking (players choose where to stand)', () => {
+  it('first round starts everyone in their own corner, not at a random spot', () => {
+    const { e } = make(4, 1);
+    const ps = e.secretPositions();
+    const { w, h, startInset } = cfg.arena;
+    expect(ps.map((p) => [p.x, p.y])).toEqual([
+      [startInset, startInset],
+      [w - startInset, h - startInset],
+      [w - startInset, startInset],
+      [startInset, h - startInset],
+    ]);
+    // different RNG, same start: it is not random
+    expect(make(4, 99).e.secretPositions()).toEqual(ps);
+  });
+
+  it('moves at the configured speed and only while aiming', () => {
+    const { e } = make(2);
+    const x0 = pos(e, 'p0').x;
+    const y0 = pos(e, 'p0').y;
+    walk(e, 'p0', 1, 0, 0, 1000);
+    const p = pos(e, 'p0');
+    expect(p.x - x0).toBeGreaterThan(cfg.arena.moveSpeed * 0.9);
+    expect(p.x - x0).toBeLessThanOrEqual(cfg.arena.moveSpeed * 1.05);
+    expect(p.y).toBe(y0);
+    expect(pos(e, 'p1')).toEqual({ id: 'p1', x: cfg.arena.w - cfg.arena.startInset, y: cfg.arena.h - cfg.arena.startInset });
+    // after the aiming phase ends nobody can walk any more
+    e.tick(T.aimMs);
+    expect(e.phase).toBe('lock');
+    const frozen = pos(e, 'p0');
+    e.setMove('p0', 1, 0, T.aimMs + 10);
+    e.tick(T.aimMs + 100);
+    expect(pos(e, 'p0')).toEqual(frozen);
+  });
+
+  it('stays inside the arena margins', () => {
+    const { e } = make(2);
+    let t = walk(e, 'p0', 1, 1, 0, 3000);
+    t = walk(e, 'p0', -1, -1, t, 3000);
+    const p = pos(e, 'p0');
+    expect(p.x).toBeGreaterThanOrEqual(cfg.arena.wallMargin);
+    expect(p.y).toBeGreaterThanOrEqual(cfg.arena.wallMargin);
+    expect(p.x).toBeLessThanOrEqual(cfg.arena.w - cfg.arena.wallMargin);
+    expect(p.y).toBeLessThanOrEqual(cfg.arena.h - cfg.arena.wallMargin);
+  });
+
+  it('diagonal movement is not faster than straight movement', () => {
+    const { e } = make(2);
+    const a = pos(e, 'p0');
+    walk(e, 'p0', 5, 5, 0, 500);
+    const b = pos(e, 'p0');
+    expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeLessThanOrEqual(cfg.arena.moveSpeed * 0.5 * 1.05);
+  });
+
+  it('an intent that is not refreshed expires (a lost stop message cannot leave a player running)', () => {
+    const { e } = make(2);
+    e.setMove('p0', 1, 0, 0);
+    for (let t = 25; t <= 1500; t += 25) e.tick(t);
+    const moved = pos(e, 'p0').x - cfg.arena.startInset;
+    expect(moved).toBeLessThan(cfg.arena.moveSpeed * 0.75);
+  });
+
+  it('walking never reveals anything to opponents', () => {
+    const { e } = make(2);
+    walk(e, 'p0', 1, 1, 0, 800);
+    const other = e.snapshot(800, 'p1');
+    expect(other.players.find((p) => p.id === 'p0')!.x).toBeUndefined();
+    expect(JSON.stringify(other)).not.toContain(String(Math.round(pos(e, 'p0').x)));
+    const own = e.snapshot(800, 'p0');
+    expect(own.players.find((p) => p.id === 'p0')!.x).toBeCloseTo(pos(e, 'p0').x, 5);
+  });
+
+  it('ignores movement from a disconnected or dead player', () => {
+    const { e } = make(2);
+    e.setConnected('p0', false, 0);
+    const before = pos(e, 'p0');
+    e.setMove('p0', 1, 0, 10);
+    e.tick(200);
+    expect(pos(e, 'p0')).toEqual(before);
+  });
+
+  it('where you stood decides who you hit: walking into the line of fire changes the outcome', () => {
+    const miss = make(2);
+    miss.e.setAim('p0', 0); // p0 (top-left corner) fires along y=150
+    miss.e.tick(T.aimMs);
+    miss.e.tick(T.aimMs + T.lockMs);
+    expect(miss.e.snapshot(T.aimMs + T.lockMs).shots.find((s) => s.shooterId === 'p0')!.hitId).toBeNull();
+
+    const { e } = make(2);
+    e.setAim('p0', 0);
+    walk(e, 'p1', 0, -1, 0, 2500); // p1 walks from the bottom-right corner up onto p0's line
+    expect(Math.abs(pos(e, 'p1').y - pos(e, 'p0').y)).toBeLessThan(15);
+    e.tick(T.aimMs);
+    e.tick(T.aimMs + T.lockMs);
+    expect(e.snapshot(T.aimMs + T.lockMs).shots.find((s) => s.shooterId === 'p0')!.hitId).toBe('p1');
+  });
+
+  it('bots walk to a spot of their own choosing and stay in bounds', () => {
+    const e = new MatchEngine(
+      inits(3).map((p) => ({ ...p, botLevel: 'normal' as const })),
+      seededRng(8),
+      buildConfig({ timing: { aimMs: 4000 } }),
+    );
+    e.start(0);
+    const start = e.secretPositions();
+    for (let t = 25; t < 4000; t += 25) e.tick(t);
+    const end = e.secretPositions();
+    expect(end.some((q, i) => q.x !== start[i].x || q.y !== start[i].y)).toBe(true);
+    for (const q of end) {
+      expect(q.x).toBeGreaterThanOrEqual(cfg.arena.wallMargin);
+      expect(q.x).toBeLessThanOrEqual(cfg.arena.w - cfg.arena.wallMargin);
+      expect(q.y).toBeGreaterThanOrEqual(cfg.arena.wallMargin);
+      expect(q.y).toBeLessThanOrEqual(cfg.arena.h - cfg.arena.wallMargin);
     }
   });
 });

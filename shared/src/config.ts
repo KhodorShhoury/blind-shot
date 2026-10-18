@@ -5,10 +5,12 @@ export interface GameConfig {
     w: number;
     h: number;
     playerRadius: number;
-    /** Minimum distance between a player's centre and the arena walls when spawning. */
-    spawnMargin: number;
-    /** Minimum distance between two players' centres when spawning (relaxed only if placement keeps failing). */
-    minPlayerDist: number;
+    /** Players can walk anywhere in the arena but their centre stays this far from the walls. */
+    wallMargin: number;
+    /** Walking speed in arena px/s (only possible while aiming). */
+    moveSpeed: number;
+    /** Distance from the corner (per axis) of the first-round start positions. */
+    startInset: number;
   };
   beam: {
     halfWidth: number;
@@ -40,16 +42,17 @@ export interface GameConfig {
   };
   colors: { name: string; hex: string; glow: string }[];
   /**
-   * Bots are blind too: they only know their own position. `centerBias` is the chance they aim roughly
-   * through the middle of the arena (where more opponents tend to be), within +-`spreadDeg`.
+   * Bots are blind too: they only know their own position. They wander to a random spot while aiming;
+   * `centerBias` is the chance they then aim roughly through the middle of the arena (where more
+   * opponents tend to be), within +-`spreadDeg`.
    */
   bots: Record<BotLevel, { centerBias: number; spreadDeg: number; lockMin: number; lockMax: number; rethink: number }>;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  arena: { w: 1000, h: 1000, playerRadius: 40, spawnMargin: 80, minPlayerDist: 150 },
+  arena: { w: 1000, h: 1000, playerRadius: 40, wallMargin: 50, moveSpeed: 280, startInset: 150 },
   beam: { halfWidth: 14, maxBounces: 0, maxLength: 3600, speed: 7000 },
-  timing: { aimMs: 5000, lockMs: 600, fireMs: 1500, resultMs: 2300, allLockedGraceMs: 900, warnMs: 3000 },
+  timing: { aimMs: 8000, lockMs: 600, fireMs: 1500, resultMs: 2300, allLockedGraceMs: 900, warnMs: 3000 },
   room: {
     minPlayers: 2,
     maxPlayers: 4,

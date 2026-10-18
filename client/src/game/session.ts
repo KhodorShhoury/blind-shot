@@ -56,6 +56,18 @@ export abstract class GameSession {
 
   abstract setAim(angle: number): void;
   abstract setLocked(locked: boolean): void;
+  /** Walking intent, a vector with magnitude <= 1. Callers refresh it ~10x/s while it is non-zero. */
+  abstract setMove(dx: number, dy: number): void;
+  /** Update my own (private) position without a full re-render. */
+  setOwnPosition(round: number, x: number, y: number): void {
+    const snap = this.view?.snap;
+    if (!snap || snap.round !== round || snap.phase !== 'aiming') return;
+    const me = snap.players.find((p) => p.id === this.youId);
+    if (me && me.alive) {
+      me.x = x;
+      me.y = y;
+    }
+  }
   toggleLock(): void {
     this.setLocked(!this.locked);
   }

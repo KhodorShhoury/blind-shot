@@ -1,5 +1,5 @@
 import { DEFAULT_CONFIG, type BotLevel, type GameConfig, type Rng } from './config';
-import { randomSpawns, traceBeam, normAngle } from './geometry';
+import { traceBeam, normAngle } from './geometry';
 import { planBot, type BotPlan } from './bots';
 
 export type Phase = 'aiming' | 'lock' | 'fire' | 'result' | 'over';
@@ -77,6 +77,10 @@ interface PState {
   x: number;
   y: number;
   aim: number;
+  /** Walking intent (unit vector or smaller) and when it was last refreshed. */
+  mx: number;
+  my: number;
+  mvAt: number;
   locked: boolean;
   kills: number;
   eliminatedRound: number | null;
@@ -92,6 +96,7 @@ export class MatchEngine {
   private phaseStart = 0;
   private phaseEnd = 0;
   private roundStart = 0;
+  private lastMoveT = 0;
   /** Players who were positioned at the start of the current round (i.e. who take part in its volley). */
   private roundRoster = new Set<string>();
   private allLockedSince: number | null = null;
@@ -119,6 +124,9 @@ export class MatchEngine {
       x: cfg.arena.w / 2,
       y: cfg.arena.h / 2,
       aim: 0,
+      mx: 0,
+      my: 0,
+      mvAt: 0,
       locked: false,
       kills: 0,
       eliminatedRound: null,
@@ -157,9 +165,34 @@ export class MatchEngine {
     return true;
   }
 
+  /**
+   * Walking intent for a human player (unit vector or smaller). Only possible while aiming. The intent
+   * expires unless it is refreshed, so a lost "stop" message can never leave someone running forever.
+   */
+  setMove(id: string, dx: number, dy: number, now: number): void {
+    const p = this.find(id);
+    if (!p || this.phase !== 'aiming' || !p.alive || p.botLevel || !p.connected) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const len = Math.hypot(dx, dy);
+    const k = len > 1 ? 1 / len : 1;
+    p.mx = dx * k;
+    p.my = dy * k;
+    p.mvAt = now;
+  }
+
+  /** A player's own position (null if they are not part of the current round). */
+  ownPosition(id: string): { x: number; y: number } | null {
+    const p = this.find(id);
+    return p && p.alive ? { x: p.x, y: p.y } : null;
+  }
+
   setConnected(id: string, connected: boolean, now: number): void {
     const p = this.find(id);
     if (!p || p.botLevel) return;
+    if (!connected) {
+      p.mx = 0;
+      p.my = 0;
+    }
     p.connected = connected;
     p.disconnectedAt = connected ? null : now;
     // a disconnected player's current aim is auto-committed
@@ -179,13 +212,26 @@ export class MatchEngine {
       this.finish(now);
       return;
     }
-    // Fresh, independent random positions every round (generated here, on the authoritative side only).
-    const spots = randomSpawns(alive.length, this.cfg, this.rng);
-    alive.forEach((p, i) => {
-      p.x = spots[i].x;
-      p.y = spots[i].y;
+    // Players choose their own position by walking. Only the very first round needs a starting spot:
+    // one corner each. After that everybody simply starts where they last stood.
+    if (this.round === 1) {
+      const { w, h, startInset: s } = this.cfg.arena;
+      const corners = [
+        { x: s, y: s },
+        { x: w - s, y: h - s },
+        { x: w - s, y: s },
+        { x: s, y: h - s },
+      ];
+      alive.forEach((p, i) => {
+        p.x = corners[i % corners.length].x;
+        p.y = corners[i % corners.length].y;
+      });
+    }
+    alive.forEach((p) => {
       // neutral starting angle: gives no hint about where anybody is
       p.aim = this.rng() * Math.PI * 2 - Math.PI;
+      p.mx = 0;
+      p.my = 0;
       p.locked = !p.connected;
       p.switched = false;
       p.plan = null;
@@ -199,6 +245,7 @@ export class MatchEngine {
     this.eliminations = [];
     this.allLockedSince = null;
     this.roundStart = now;
+    this.lastMoveT = now;
     this.setPhase('aiming', now, this.cfg.timing.aimMs);
     this.onEvent('round');
   }
@@ -224,13 +271,14 @@ export class MatchEngine {
       switch (this.phase) {
         case 'aiming': {
           this.runBots(now);
+          this.integrate(now);
           const humansAll = this.alivePlayers.every((p) => p.locked);
           if (humansAll) this.allLockedSince ??= now;
           else this.allLockedSince = null;
           const early = this.allLockedSince !== null && now - this.allLockedSince >= this.cfg.timing.allLockedGraceMs;
           if (now >= this.phaseEnd || early) {
             const t = Math.min(now, this.phaseEnd);
-            for (const p of this.players) if (p.alive) p.locked = true;
+            for (const p of this.players) if (p.alive) { p.locked = true; p.mx = 0; p.my = 0; }
             this.setPhase('lock', early ? now : t, this.cfg.timing.lockMs);
             this.onEvent('lock');
             continue;
@@ -261,6 +309,41 @@ export class MatchEngine {
         default:
           return;
       }
+    }
+  }
+
+  /** Moves walking players (humans by intent, bots towards their destination), inside the arena. */
+  private integrate(now: number): void {
+    const t = Math.min(now, this.phaseEnd);
+    const dt = Math.min(0.1, Math.max(0, (t - this.lastMoveT) / 1000));
+    this.lastMoveT = Math.max(this.lastMoveT, t);
+    if (dt <= 0) return;
+    const { w, h, wallMargin: m, moveSpeed } = this.cfg.arena;
+    const elapsed = t - this.roundStart;
+    for (const p of this.players) {
+      if (!p.alive) continue;
+      let dx = 0;
+      let dy = 0;
+      if (p.plan) {
+        if (elapsed < p.plan.moveAt) continue;
+        const vx = p.plan.dest.x - p.x;
+        const vy = p.plan.dest.y - p.y;
+        const d = Math.hypot(vx, vy);
+        if (d < 0.5) continue;
+        const step = Math.min(moveSpeed * dt, d);
+        dx = (vx / d) * step;
+        dy = (vy / d) * step;
+      } else if (p.mx !== 0 || p.my !== 0) {
+        if (t - p.mvAt > 600) {
+          p.mx = 0;
+          p.my = 0;
+          continue;
+        }
+        dx = p.mx * moveSpeed * dt;
+        dy = p.my * moveSpeed * dt;
+      } else continue;
+      p.x = Math.min(w - m, Math.max(m, p.x + dx));
+      p.y = Math.min(h - m, Math.max(m, p.y + dy));
     }
   }
 

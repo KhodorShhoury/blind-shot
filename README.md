@@ -30,7 +30,7 @@ npm run dev:client   # Vite on :5173
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | server + client with hot reload |
-| `npm test` | 49 unit + integration tests (Vitest) |
+| `npm test` | 57 unit + integration tests (Vitest) |
 | `npm run typecheck` | strict TypeScript across shared/server/client |
 | `npm run build` | production builds → `server/dist`, `client/dist` |
 | `npm start` | run the built server (`node server/dist/index.js`) |
@@ -39,19 +39,19 @@ npm run dev:client   # Vite on :5173
 
 Blind Shot is a game of nerve and luck. **Nobody can see anybody else.**
 
-1. **Scatter & vanish** – at the start of *every* round the server drops each survivor at a fresh, independent random spot (wall margin + minimum spacing enforced) and hides everyone. You only see yourself.
-2. **Aiming (5 s)** – spin your laser through 360° (mouse or touch stick) and choose a direction on instinct. Your aim and preview are private; the preview is a plain line to the wall and knows nothing about opponents. Click / `Space` / LOCK commits; click again to unlock. If everyone locks, the phase ends early after a short grace period.
-3. **Lock (0.6 s)** – aims freeze.
+1. **Walk & hide** – everyone is invisible. While the timer runs, walk wherever you like (**WASD / arrows**, or the green stick on a phone). Nobody places you: you choose your own spot. The first round starts each player in their own corner; after that you start where you last stood.
+2. **Aiming (8 s)** – spin your laser through 360° (mouse or the purple touch stick) and choose a direction on instinct. Your aim and preview are private; the preview is a plain line to the wall and knows nothing about opponents. Click / `Space` / LOCK commits the aim; click again to unlock. If everyone locks, the phase ends early after a short grace period.
+3. **Lock (0.6 s)** – walking and aiming freeze.
 4. **Fire (1.5 s)** – the countdown hit zero: every laser fires at the same instant in a straight line to the arena boundary. The server resolves all shots from the same pre-fire snapshot against the secret positions, so a player killed in the volley still fires. Now everyone is revealed and the lasers / hits play out.
-5. **Result (2.3 s)** – who hit whom. If nobody was hit, that is a perfectly valid round: everyone is re-scattered and a new countdown starts. Eliminated players stay out until the next match.
+5. **Result (2.3 s)** – who hit whom. If nobody was hit, that is a perfectly valid round: a new countdown starts and everyone walks again. Eliminated players stay out until the next match.
 
 One survivor wins; everyone dying in the same volley is a **draw**; a rematch can be voted on after the match.
 
-There is no movement during aiming, no radar, no aim assist, no enemy indicators and no guaranteed hit. Bots are blind too – they only know their own position.
+Walking is hidden too. There is no radar, no aim assist, no enemy indicators and no guaranteed hit. Bots are blind too – they only know their own position.
 
 ### Secrecy is enforced on the server
 
-`MatchEngine.snapshot(now, forId)` is the only thing sent to clients. During the aiming and lock phases it contains **only the receiving player's own x/y**; opponents' coordinates, aims, shots and eliminations are simply absent. Positions are included only once the volley fires (and only for the players who took part in it). The next round's positions are generated server-side and again withheld until that round's reveal. (Offline practice mode runs the engine in your own browser, so there the "server" is local.)
+`MatchEngine.snapshot(now, forId)` is the only thing sent to clients. During the aiming and lock phases it contains **only the receiving player's own x/y**; opponents' coordinates, aims, shots and eliminations are simply absent. While you walk, the server streams you only your own position (`match:pos`). Everyone's positions are sent only once the volley fires (and only for the players who took part in it); the next round hides them again. (Offline practice mode runs the engine in your own browser, so there the "server" is local.)
 
 ## Architecture
 
@@ -130,7 +130,7 @@ Deploy. Finally set `CLIENT_ORIGIN` on the backend to the Vercel domain (and any
 
 `npm test` runs:
 
-- **geometry** – hits, nearest-target rule, beam thickness, owner immunity, random spawns (bounds, spacing, independence, fairness)
+- **geometry** – hits, nearest-target rule, beam thickness, owner immunity, 
 - **engine** – phase flow, early lock, hidden positions & aims, simultaneous volleys, no-hit rounds, four-player loop, same-volley kills, multi-kill, draws, standings, disconnects/forfeit/reconnect, blind bots (own position only), bot-only matches terminate
 - **protocol** – validators and rate limiter
 - **server integration (real Socket.IO)** – 2/4-player rooms, capacity, host-only start, ready gating, host transfer, room cleanup, full match with secrecy checks, rematch, disconnect + token rejoin, forfeit, malformed/flooded input

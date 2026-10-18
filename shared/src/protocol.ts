@@ -11,6 +11,7 @@ export const C2S = {
   toLobby: 'room:lobby',
   rematch: 'room:rematch',
   aim: 'match:aim',
+  move: 'match:move',
   lock: 'match:lock',
 } as const;
 
@@ -18,6 +19,7 @@ export const S2C = {
   lobby: 'lobby:state',
   match: 'match:state',
   lockInfo: 'match:lockinfo',
+  pos: 'match:pos',
   error: 'room:error',
 } as const;
 
@@ -54,6 +56,13 @@ export interface MatchMessage {
   snapshot: MatchSnapshot;
 }
 
+/** Private, frequent update of the receiving player's OWN position while aiming. */
+export interface PosUpdate {
+  round: number;
+  x: number;
+  y: number;
+}
+
 export interface LockInfo {
   id: string;
   locked: boolean;
@@ -87,6 +96,16 @@ export function normalizeRoomCode(raw: unknown, cfg: Pick<GameConfig, 'room'>): 
 export function parseAngle(raw: unknown): number | null {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || Math.abs(raw) > 1000) return null;
   return raw;
+}
+
+/** Movement intent: a vector with magnitude <= 1 (anything bigger is normalised). */
+export function parseMove(raw: unknown): { x: number; y: number } | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const { x, y } = raw as { x?: unknown; y?: unknown };
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if (Math.abs(x) > 100 || Math.abs(y) > 100) return null;
+  const len = Math.hypot(x, y);
+  return len > 1 ? { x: x / len, y: y / len } : { x, y };
 }
 
 export function parseBool(raw: unknown): boolean | null {

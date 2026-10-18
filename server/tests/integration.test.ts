@@ -176,7 +176,7 @@ describe('match flow', () => {
     expect(a.last.players.every((p) => p.alive)).toBe(true);
   });
 
-  it('keeps playing when nobody is hit: new round, new hidden positions', async () => {
+  it('keeps playing when nobody is hit: next round, positions hidden again', async () => {
     const { a, b } = await twoPlayerRoom();
     await a.emit('room:start');
     await until(() => a.last?.phase === 'aiming' && a.last.round === 1);
@@ -189,10 +189,37 @@ describe('match flow', () => {
     expect(a.last.players.every((q) => q.alive)).toBe(true);
     await until(() => a.last?.phase === 'aiming' && a.last.round === 2 && b.last?.phase === 'aiming' && b.last.round === 2);
     const r2 = secrets(a.code);
-    expect(r2.get(a.playerId)).not.toEqual(r1.get(a.playerId));
+    // nobody is re-placed: everyone starts the next round where they stood
+    expect(r2.get(a.playerId)).toEqual(r1.get(a.playerId));
     // the new round hides the foe again, and nobody was told the new coordinates
     expect(a.last.players.find((q) => q.id === b.playerId)!.x).toBeUndefined();
     expect(b.last.players.find((q) => q.id === a.playerId)!.x).toBeUndefined();
+  });
+
+  it('lets a player walk; only they ever learn their own live position', async () => {
+    const { a, b } = await twoPlayerRoom();
+    await a.emit('room:start');
+    await until(() => a.last?.phase === 'aiming' && b.last?.phase === 'aiming');
+    const posA: { round: number; x: number; y: number }[] = [];
+    const posB: { round: number; x: number; y: number }[] = [];
+    a.s.on('match:pos', (m: any) => posA.push(m));
+    b.s.on('match:pos', (m: any) => posB.push(m));
+    const start = secrets(a.code).get(a.playerId)!;
+    const bStart = secrets(a.code).get(b.playerId)!;
+    // refresh the intent like the real client does (it expires if not refreshed)
+    const iv = setInterval(() => a.s.emit('match:move', { x: 1, y: 0 }), 50);
+    await until(() => posA.length > 0 && posA[posA.length - 1].x > start.x + 20, 3000);
+    clearInterval(iv);
+    a.s.emit('match:move', { x: 0, y: 0 });
+    expect(secrets(a.code).get(a.playerId)!.x).toBeGreaterThan(start.x);
+    expect(secrets(a.code).get(b.playerId)).toEqual(bStart);
+    // B never receives A's position, neither in position updates nor in snapshots
+    expect(posB.every((m) => m.x === secrets(a.code).get(b.playerId)!.x || m.x === bStart.x)).toBe(true);
+    for (const snap of b.snaps.filter((x) => x.phase === 'aiming')) expect(snap.players.find((q) => q.id === a.playerId)!.x).toBeUndefined();
+    // malformed movement is ignored
+    for (const bad of [null, 'x', { x: 'a' }, { x: NaN, y: 1 }, { x: 1e12, y: 0 }]) a.s.emit('match:move', bad);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(a.s.connected).toBe(true);
   });
 
   it('survives a disconnect during aiming and restores state on rejoin', async () => {

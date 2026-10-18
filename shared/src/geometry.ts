@@ -111,49 +111,6 @@ export function traceBeam(
   return { points, hitId, end, bounces, length: cfg.beam.maxLength - remaining };
 }
 
-/**
- * Independent, uniformly random spawn points for n players (rejection sampling with a minimum
- * pairwise distance and a wall margin). Every call is a fresh draw: nothing depends on earlier rounds.
- * If the constraints keep failing the distance is relaxed step by step; the last resort is a jittered
- * grid, so placement always succeeds and never overlaps.
- */
-export function randomSpawns(n: number, cfg: GameConfig, rng: Rng): { x: number; y: number }[] {
-  const { w, h, spawnMargin: m, minPlayerDist } = cfg.arena;
-  const rw = w - 2 * m;
-  const rh = h - 2 * m;
-  for (let relax = 0; relax < 5; relax++) {
-    const minD = minPlayerDist * (1 - relax * 0.15);
-    for (let attempt = 0; attempt < 120; attempt++) {
-      const pts: { x: number; y: number }[] = [];
-      for (let i = 0; i < n; i++) {
-        let placed = false;
-        for (let k = 0; k < 40 && !placed; k++) {
-          const c = { x: Math.round(m + rng() * rw), y: Math.round(m + rng() * rh) };
-          if (pts.every((q) => Math.hypot(q.x - c.x, q.y - c.y) >= minD)) {
-            pts.push(c);
-            placed = true;
-          }
-        }
-        if (!placed) break;
-      }
-      if (pts.length === n) return pts;
-    }
-  }
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const cells = Array.from({ length: cols * rows }, (_, i) => i);
-  for (let i = cells.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [cells[i], cells[j]] = [cells[j], cells[i]];
-  }
-  const cw = w / cols;
-  const ch = h / rows;
-  return cells.slice(0, n).map((c) => ({
-    x: Math.round((c % cols) * cw + m + rng() * (cw - 2 * m)),
-    y: Math.round(Math.floor(c / cols) * ch + m + rng() * (ch - 2 * m)),
-  }));
-}
-
 /** Shortest distance from point to a polyline (flat array). */
 export function distToPolyline(points: number[], x: number, y: number): number {
   let best = Infinity;

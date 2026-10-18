@@ -35,6 +35,8 @@ export class LocalSession extends GameSession {
   private step(): void {
     this.engine.tick(performance.now());
     if (this.engine.phase === 'aiming') {
+      const own = this.engine.ownPosition(this.youId);
+      if (own && this.view) this.setOwnPosition(this.view.snap.round, own.x, own.y);
       const sig = this.engine.snapshot(0, this.youId).players.map((p) => (p.locked ? 1 : 0)).join('');
       if (sig !== this.lockSig) {
         const old = this.lockSig;
@@ -55,6 +57,10 @@ export class LocalSession extends GameSession {
     if (this.locked) return;
     this.aim = angle;
     this.engine.setAim(this.youId, angle);
+  }
+
+  setMove(dx: number, dy: number): void {
+    this.engine.setMove(this.youId, dx, dy, performance.now());
   }
 
   setLocked(locked: boolean): void {

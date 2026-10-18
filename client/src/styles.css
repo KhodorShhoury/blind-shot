@@ -192,9 +192,14 @@ input[type='range'] { width: 100%; accent-color: var(--accent); height: 28px; }
 .lock-btn small:empty { display: none; }
 .lock-btn:active { transform: scale(0.96); }
 .lock-btn.on { background: rgba(57, 255, 136, 0.18); border-color: var(--ok); color: var(--ok); box-shadow: 0 0 30px rgba(57, 255, 136, 0.3); }
-.game[data-touch='1'] .lock-btn { min-width: 168px; min-height: 84px; font-size: 26px; }
+.game[data-touch='1'] .lock-btn { min-width: 104px; min-height: 84px; font-size: 20px; }
 .joystick { position: relative; width: 168px; height: 168px; border-radius: 50%; background: radial-gradient(circle, rgba(157, 107, 255, 0.14), rgba(17, 24, 39, 0.7) 70%); border: 2px solid var(--line); touch-action: none; display: grid; place-items: center; flex: none; }
 .joystick .ring { position: absolute; inset: 34px; border-radius: 50%; border: 1.5px dashed rgba(157, 107, 255, 0.35); }
+.joystick .stick-label { position: absolute; bottom: 8px; font-size: 11px; letter-spacing: 0.2em; color: var(--muted); pointer-events: none; }
+.joystick.move { border-color: rgba(57, 255, 136, 0.45); }
+.joystick.move .knob { background: radial-gradient(circle at 35% 30%, #b9ffd6, #25c26a); box-shadow: 0 0 24px rgba(57, 255, 136, 0.55); }
+.game[data-touch='1'] .joystick { width: 128px; height: 128px; }
+.game[data-touch='1'] .joystick .knob { width: 50px; height: 50px; }
 .joystick .knob { width: 62px; height: 62px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #d9c6ff, #8a55ff); box-shadow: 0 0 24px rgba(157, 107, 255, 0.7); will-change: transform; }
 .conn-banner { position: absolute; top: calc(var(--sat) + 56px); left: 50%; transform: translateX(-50%); background: rgba(255, 61, 107, 0.92); color: #fff; padding: 8px 18px; border-radius: 99px; font-weight: 700; letter-spacing: 0.06em; z-index: 5; }
 
@@ -207,7 +212,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); height: 28px; }
   .status { position: absolute; left: 0; right: 0; bottom: calc(var(--sab) + 2px); padding: 0; min-height: 0; pointer-events: none; font-size: 15px; z-index: 2; }
   .controls { position: absolute; left: calc(var(--sal) + 10px); right: calc(var(--sar) + 10px); bottom: calc(var(--sab) + 10px); padding: 0; pointer-events: none; z-index: 2; }
   .controls > * { pointer-events: auto; }
-  .joystick { width: 140px; height: 140px; }
+  .game[data-touch='1'] .joystick { width: 140px; height: 140px; }
   .game[data-touch='1'] .lock-btn { min-height: 70px; min-width: 140px; }
 }
 

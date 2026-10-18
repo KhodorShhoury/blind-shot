@@ -9,6 +9,8 @@ import {
   isToken,
   normalizeRoomCode,
   parseAngle,
+  parseMove,
+  type PosUpdate,
   parseBool,
   randomRoomCode,
   sanitizeName,
@@ -43,6 +45,7 @@ interface Room {
 interface SocketData {
   general: RateLimiter;
   aim: RateLimiter;
+  move: RateLimiter;
   lock: RateLimiter;
   binding: { code: string; playerId: string } | null;
 }
@@ -65,6 +68,7 @@ export class RoomManager {
     const data: SocketData = {
       general: new RateLimiter(10, 3),
       aim: new RateLimiter(80, 60),
+      move: new RateLimiter(60, 30),
       lock: new RateLimiter(10, 5),
       binding: null,
     };
@@ -116,6 +120,12 @@ export class RoomManager {
       const a = parseAngle((payload as any)?.a);
       if (a === null) return;
       this.withMember(socket, (r, m) => r.engine && r.status === 'playing' && r.engine.setAim(m.id, a));
+    });
+    socket.on(C2S.move, (payload: unknown) => {
+      if (!data.move.take()) return;
+      const v = parseMove(payload);
+      if (v === null) return;
+      this.withMember(socket, (r, m) => r.engine && r.status === 'playing' && r.engine.setMove(m.id, v.x, v.y, Date.now()));
     });
     socket.on(C2S.lock, (payload: unknown) => {
       if (!data.lock.take()) return;
@@ -363,7 +373,11 @@ export class RoomManager {
     for (const x of this.activeMembers(room)) if (x.socketId === null) engine.setConnected(x.id, false, Date.now());
     this.sendLobby(room);
     engine.start(Date.now());
-    room.tick = setInterval(() => engine.tick(Date.now()), 25);
+    let n = 0;
+    room.tick = setInterval(() => {
+      engine.tick(Date.now());
+      if (++n % 3 === 0) this.sendPositions(room, engine);
+    }, 25);
   }
 
   private toLobby(room: Room, m: Member): void {
@@ -424,6 +438,16 @@ export class RoomManager {
 
   private emitRoom(room: Room, ev: string, payload: unknown): void {
     this.io.to(room.code).emit(ev, payload);
+  }
+
+  /** While aiming, each player gets (only) their own live position; nobody else's is ever sent. */
+  private sendPositions(room: Room, engine: MatchEngine): void {
+    if (room.engine !== engine || engine.phase !== 'aiming') return;
+    for (const m of this.activeMembers(room)) {
+      if (!m.socketId) continue;
+      const pos = engine.ownPosition(m.id);
+      if (pos) this.io.to(m.socketId).volatile.emit(S2C.pos, { round: engine.round, x: Math.round(pos.x * 10) / 10, y: Math.round(pos.y * 10) / 10 } satisfies PosUpdate);
+    }
   }
 
   private sendMatchTo(room: Room, m: Member): void {
