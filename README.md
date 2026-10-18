@@ -58,7 +58,7 @@ Walking is hidden too. There is no radar, no aim assist, no enemy indicators and
 ```
 shared/src     Pure TypeScript used by BOTH client and server
   config.ts      every timing, colour, arena size, bot parameter (override with buildConfig)
-  geometry.ts    straight laser tracing (thickness, nearest hit), random spawn generation
+  geometry.ts    straight laser tracing (thickness, nearest hit)
   engine.ts      MatchEngine – phase state machine, volley resolution, per-player snapshots
   bots.ts        blind bot planning (own position only; difficulty = centre bias / timing)
   protocol.ts    event names, payload types, validators, rate limiter
